@@ -5,10 +5,10 @@ Scope gate: if a task isn't here, ask before building.
 ## v1 — MVP (build in this order)
 
 ### 1. Data layer
-- [ ] `config.py`: pair registry dict (start with `QQQ: {leveraged: SQQQ, underlying: QQQ, leverage: 3}`).
-- [ ] `data.py`: `get_prices(ticker)` → DataFrame of daily OHLC.
-- [ ] `_fetch_polygon(ticker)`: pull daily aggregates from Polygon using `POLYGON_API_KEY`.
-- [ ] Cache to `./cache/{ticker}.csv`; read cache if present, fetch only on miss.
+- [x] `config.py`: pair registry dict (start with `QQQ: {leveraged: SQQQ, underlying: QQQ, leverage: 3}`).
+- [x] `data.py`: `get_prices(ticker)` → DataFrame of daily OHLC.
+- [x] `_fetch_polygon(ticker)`: pull daily aggregates from Polygon using `POLYGON_API_KEY`.
+- [x] Cache to `./cache/{ticker}.csv`; read cache if present, fetch only on miss.
 
 **Done when:** get_prices("SQQQ") returns a clean OHLC DataFrame, and a second call reads from ./cache/SQQQ.csv instead of hitting Polygon.
 
