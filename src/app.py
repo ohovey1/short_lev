@@ -84,6 +84,9 @@ st.warning(DISCLAIMER)
 # --- Sidebar controls ---
 st.sidebar.header("Settings")
 
+# Link to the strategy explainer (its own page; default nav is hidden via config).
+st.sidebar.page_link("pages/Trade_Strategy.py", label="Trade Strategy")
+
 underlying = st.sidebar.selectbox(
     "Pair",
     list(config.PAIRS.keys()),
