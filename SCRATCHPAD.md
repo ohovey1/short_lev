@@ -88,6 +88,13 @@ Each entry: what changed, what's next, open questions/blockers.
 **Open questions / blockers:**
 - None.
 
+**Verified (lifecycle):**
+- `scripts/verify_backtest.py`: independent re-derivation of the tranche ladder (separate
+  entry-set + realize-at-d+hold_days price lookup, direct engine calls) matches the
+  backtest curve exactly (max equity error 0.0 over 501 days, 0 open-count mismatches).
+  Confirms: equity = realized + open marks with no double-count, and tranches realize at
+  the correct d+hold_days prices. Backtest P&L bookkeeping is sound -> clear for UI.
+
 ---
 
 ## Session template (copy this)
