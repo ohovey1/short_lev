@@ -14,7 +14,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CACHE_DIR = "cache"
+# Anchor the cache to the project root (parent of src/) so it resolves the same
+# regardless of the process working directory.
+CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache")
 
 
 def get_prices(ticker):

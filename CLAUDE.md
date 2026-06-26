@@ -16,7 +16,7 @@ A barebones backtest for a delta-neutral leveraged-ETF decay strategy. One-day M
 
 ## Development Workflow
 - No emojis — stated as a hard rule covering code, comments, commits, and UI. (Caveat from the docs: CLAUDE.md is advisory, so this is a strong request, not a guarantee. If Claude Code ever slips an emoji in, that's the signal to add the one-line PreToolUse hook that blocks it deterministically. Not worth setting up preemptively.)
-- Commits — one commit per layer/checkbox once its "Done when" gate passes, imperative lowercase messages with a scope prefix, no broken commits, never commit .env/cache/. I also explicitly banned AI-attribution trailer lines since those often carry emojis and you clearly want clean history.
+- Commits — **never commit until I (the user) have verified the changes myself. Stage nothing and run no `git commit` until I explicitly confirm.** When a layer is done, present what changed and wait for my go-ahead. Then: one commit per layer/checkbox once its "Done when" gate passes, imperative lowercase messages with a scope prefix, no broken commits, never commit .env/cache/. I also explicitly banned AI-attribution trailer lines since those often carry emojis and you clearly want clean history.
 - Best practices — build one layer at a time in ROADMAP order, use plan mode before non-trivial edits, validate against gates before moving on, ask before adding deps, don't touch ignored/read-only files.
 
 ## The strategy (Structure B)
@@ -47,14 +47,16 @@ Static registry in `config.py`: a dict mapping underlying → `{leveraged_ticker
 
 ## File map
 ```
-config.py     pair registry dict
-data.py       layer 1: get_prices() + cache + _fetch_polygon()
-engine.py     layer 2: pure two-leg daily P&L + borrow stub
-backtest.py   layer 3: loops engine over a window -> equity curve + metrics
-app.py        layer 4: streamlit UI
-.env          POLYGON_API_KEY=... (gitignored)
-cache/        cached CSVs (gitignored)
+src/config.py     pair registry dict
+src/data.py       layer 1: get_prices() + cache + _fetch_polygon()
+src/engine.py     layer 2: pure two-leg daily P&L + borrow stub
+src/backtest.py   layer 3: loops engine over a window -> equity curve + metrics
+src/app.py        layer 4: streamlit UI
+.env              POLYGON_API_KEY=... (gitignored)
+cache/            cached CSVs at the project root (gitignored)
 ```
+Source lives in `src/`. Run with `src` on the path (e.g. `PYTHONPATH=src`); modules
+import each other flat (`import data`, `import config`).
 
 ## Build order (follow this)
 data layer → engine → validate on one pair (QQQ/SQQQ) → backtest wrapper → UI last.
