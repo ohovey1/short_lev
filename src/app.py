@@ -83,6 +83,14 @@ base_capital = st.sidebar.number_input(
 # --- Run + render ---
 result = run(underlying, hold_days, base_capital, lookback)
 
+pair = config.PAIRS[underlying]
+
+st.subheader(f"{pair['underlying_ticker']} price (underlying)")
+st.line_chart(result["und_prices"].rename(pair["underlying_ticker"]))
+
+st.subheader(f"{pair['leveraged_ticker']} price (leveraged)")
+st.line_chart(result["lev_prices"].rename(pair["leveraged_ticker"]))
+
 st.subheader("Equity curve ($)")
 st.line_chart(result["equity_curve"])
 
@@ -91,9 +99,10 @@ c1, c2, c3 = st.columns(3)
 c1.metric("Starting capital", f"${result['starting_capital']:,.2f}")
 c2.metric("Ending capital", f"${result['ending_capital']:,.2f}")
 c3.metric("Total return", f"${result['total_return']:,.2f}")
-c4, c5 = st.columns(2)
+c4, c5, c6 = st.columns(3)
 c4.metric("Max drawdown", f"${result['max_drawdown']:,.2f}")
 c5.metric("Worst day", f"${result['worst_day']:,.2f}")
+c6.metric("Return %", f"{result['pct_return']:.2%}")
 
 st.subheader("Trades")
 st.caption("Each row is one tranche held to its full hold_days, closed at that day's prices.")
