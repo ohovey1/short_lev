@@ -22,11 +22,16 @@ import data
 import engine
 
 
-def run_backtest(underlying, hold_days, base_capital, price_field="close"):
+def run_backtest(underlying, hold_days, base_capital, price_field="close",
+                 lookback_days=None):
     """Run the overlapping-tranche backtest for one pair.
 
     A tranche opened on day d is realized at the close of day d + hold_days, so
     on any mid-window day exactly hold_days tranches are open.
+
+    lookback_days restricts the run to the last N trading days of the cached
+    window (None = full window). Slicing happens before the loop, so the curve
+    and metrics are computed on the same window.
 
     Returns a dict with the equity curve (a pandas Series indexed by date), the
     daily P&L series, and metrics (total return, max drawdown, worst day).
@@ -37,8 +42,11 @@ def run_backtest(underlying, hold_days, base_capital, price_field="close"):
     lev = data.get_prices(pair["leveraged_ticker"])
     und = data.get_prices(pair["underlying_ticker"])
 
-    # Align on the dates both legs have, in order.
+    # Align on the dates both legs have, in order, then optionally trim to the
+    # most recent lookback_days.
     dates = lev.index.intersection(und.index).sort_values()
+    if lookback_days is not None:
+        dates = dates[-lookback_days:]
     lev_prices = lev.loc[dates, price_field]
     und_prices = und.loc[dates, price_field]
 
@@ -48,12 +56,13 @@ def run_backtest(underlying, hold_days, base_capital, price_field="close"):
     short_size = notional
     long_size = leverage * notional
 
-    open_tranches = []   # each: {entry_lev, entry_und, age}
+    open_tranches = []   # each: {entry_date, entry_lev, entry_und, age}
     realized_pnl = 0.0
     borrow_paid = 0.0
 
     equity = []
     open_counts = []
+    trades = []   # one row per fully-realized tranche (closed trade)
 
     n = len(dates)
     for i, date in enumerate(dates):
@@ -71,6 +80,17 @@ def run_backtest(underlying, hold_days, base_capital, price_field="close"):
                     t["entry_lev"], lev_now, t["entry_und"], und_now, short_size, long_size
                 )
                 realized_pnl += r["net"]
+                trades.append({
+                    "open_date": t["entry_date"],
+                    "close_date": date,
+                    "lev_entry": t["entry_lev"],
+                    "lev_exit": lev_now,
+                    "und_entry": t["entry_und"],
+                    "und_exit": und_now,
+                    "short_pnl": r["short_pnl"],
+                    "long_pnl": r["long_pnl"],
+                    "total_pnl": r["net"],
+                })
             else:
                 still_open.append(t)
         open_tranches = still_open
@@ -80,7 +100,9 @@ def run_backtest(underlying, hold_days, base_capital, price_field="close"):
         #    tail (winddown) so every opened tranche realizes, symmetric with the
         #    warmup ramp at the start.
         if n - i > hold_days:
-            open_tranches.append({"entry_lev": lev_now, "entry_und": und_now, "age": 0})
+            open_tranches.append(
+                {"entry_date": date, "entry_lev": lev_now, "entry_und": und_now, "age": 0}
+            )
 
         # 3. Mark every open tranche via the engine; sum their current P&L. Charge
         #    borrow per open tranche per day (0 in v1, but kept in the equity).
@@ -99,12 +121,17 @@ def run_backtest(underlying, hold_days, base_capital, price_field="close"):
     equity_curve = pd.Series(equity, index=dates, name="equity")
     open_curve = pd.Series(open_counts, index=dates, name="open_tranches")
     daily_pnl = equity_curve.diff()
+    trades_df = pd.DataFrame(trades)
 
+    total_return = equity_curve.iloc[-1]
     return {
         "equity_curve": equity_curve,
         "daily_pnl": daily_pnl,
         "open_tranches": open_curve,
-        "total_return": equity_curve.iloc[-1],
+        "trades": trades_df,
+        "starting_capital": base_capital,
+        "ending_capital": base_capital + total_return,
+        "total_return": total_return,
         "max_drawdown": (equity_curve - equity_curve.cummax()).min(),
         "worst_day": daily_pnl.min(),
     }

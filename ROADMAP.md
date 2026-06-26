@@ -58,12 +58,14 @@ mid-window day exactly `hold_days` tranches are open (fewer at the edges); every
 comes from an engine call (no P&L math in `backtest.py`); and changing `hold_days` changes
 the curve.
 
-### 5. UI (last)
-- [ ] `app.py`: pair dropdown (from `config.py`).
-- [ ] Lookback slider (not hardcoded).
-- [ ] Equity-curve chart.
-- [ ] Metrics table.
-- [ ] Visible disclaimer: "Fees (incl. borrow) omitted — results are optimistic and not a verdict."
+### 5. UI (last) -- DONE; v1 MVP complete
+- [x] `app.py`: pair dropdown (from `config.py`).
+- [x] Lookback slider (not hardcoded; backed by `lookback_days` in `run_backtest`).
+- [x] Equity-curve chart.
+- [x] Metrics table (total return, max drawdown, worst day).
+- [x] Visible disclaimer: "Fees (incl. borrow) omitted — results are optimistic and not a verdict."
+- [x] Extras: hold_days slider, base_capital input, open-tranche-count chart. Run with
+  `streamlit run src/app.py`.
 
 ## v2 — backlog (do NOT build yet)
 - Support inverse funds (e.g. SQQQ) via signed leverage in config: store leverage with a

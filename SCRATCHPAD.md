@@ -97,6 +97,32 @@ Each entry: what changed, what's next, open questions/blockers.
 
 ---
 
+### 2026-06-26 (UI -- v1 complete)
+**Did:**
+- Added `lookback_days=None` to `backtest.run_backtest`: trims to the last N aligned
+  trading days before the loop (curve + metrics on the same window). Backward-compatible.
+- New `src/app.py` (Streamlit UI): pair dropdown (from config.PAIRS), lookback slider,
+  hold_days slider, base_capital input; equity-curve chart, metrics (total return / max
+  drawdown / worst day), open-tranche-count chart, and the verbatim fees-omitted
+  disclaimer. Presentation only -- every number from run_backtest, no P&L math.
+
+**Verified:**
+- lookback_days=60 -> 60-day curve (ends 2026-06-25); full-window call unchanged
+  (+$2442.27). verify_backtest.py still PASS.
+- App boots headless (HTTP 200, no tracebacks); app's exact calls exercised standalone
+  produce sane metrics; no bare P&L arithmetic in app.py.
+
+**Status:** v1 MVP complete (data -> engine -> backtest -> UI). Run with
+`streamlit run src/app.py`.
+
+**Next (v2 backlog):** real borrow fee, inverse-fund support via signed leverage, more
+pairs, Sharpe/Sortino, longer history.
+
+**Open questions / blockers:**
+- None.
+
+---
+
 ## Session template (copy this)
 
 ### YYYY-MM-DD 
