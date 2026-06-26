@@ -1,0 +1,110 @@
+"""Layer 3: overlapping-tranche, multi-day-hold backtest.
+
+Strategy: open one tranche per day at that day's prices and hold each tranche
+for hold_days days. On any mid-window day, hold_days tranches are open at
+staggered ages; the window edges (warmup/winddown) have fewer. This ladder of
+overlapping holds is what captures the leveraged fund's multi-day decay (the
+old daily-reset version only scraped one interval's cost drag).
+
+This layer holds all state (the tranche ladder + realized P&L). It calls the
+engine for every P&L number and contains NO P&L math of its own.
+
+Fair-comparison normalization: longer hold_days means more open tranches and
+thus more gross exposure, so raw dollar P&L would not be comparable across
+hold_days. We size each tranche so total deployed capital is constant:
+per-tranche notional = base_capital / hold_days.
+"""
+
+import pandas as pd
+
+import config
+import data
+import engine
+
+
+def run_backtest(underlying, hold_days, base_capital, price_field="close"):
+    """Run the overlapping-tranche backtest for one pair.
+
+    A tranche opened on day d is realized at the close of day d + hold_days, so
+    on any mid-window day exactly hold_days tranches are open.
+
+    Returns a dict with the equity curve (a pandas Series indexed by date), the
+    daily P&L series, and metrics (total return, max drawdown, worst day).
+    """
+    pair = config.PAIRS[underlying]
+    leverage = pair["leverage"]
+
+    lev = data.get_prices(pair["leveraged_ticker"])
+    und = data.get_prices(pair["underlying_ticker"])
+
+    # Align on the dates both legs have, in order.
+    dates = lev.index.intersection(und.index).sort_values()
+    lev_prices = lev.loc[dates, price_field]
+    und_prices = und.loc[dates, price_field]
+
+    # Each tranche is its own delta-neutral two-leg position. Normalize so total
+    # deployed capital is constant across hold_days.
+    notional = base_capital / hold_days
+    short_size = notional
+    long_size = leverage * notional
+
+    open_tranches = []   # each: {entry_lev, entry_und, age}
+    realized_pnl = 0.0
+    borrow_paid = 0.0
+
+    equity = []
+    open_counts = []
+
+    n = len(dates)
+    for i, date in enumerate(dates):
+        lev_now = lev_prices.loc[date]
+        und_now = und_prices.loc[date]
+
+        # 1. Age yesterday's open tranches by one day. Any that have now been held
+        #    hold_days days (opened on day d, today is d + hold_days) realize at
+        #    today's prices and drop out of the ladder.
+        still_open = []
+        for t in open_tranches:
+            t["age"] += 1
+            if t["age"] >= hold_days:
+                r = engine.position_pnl(
+                    t["entry_lev"], lev_now, t["entry_und"], und_now, short_size, long_size
+                )
+                realized_pnl += r["net"]
+            else:
+                still_open.append(t)
+        open_tranches = still_open
+
+        # 2. Open a new tranche at today's prices (age 0) -- but only if it can
+        #    complete a full hold_days hold before the window ends. This tapers the
+        #    tail (winddown) so every opened tranche realizes, symmetric with the
+        #    warmup ramp at the start.
+        if n - i > hold_days:
+            open_tranches.append({"entry_lev": lev_now, "entry_und": und_now, "age": 0})
+
+        # 3. Mark every open tranche via the engine; sum their current P&L. Charge
+        #    borrow per open tranche per day (0 in v1, but kept in the equity).
+        open_pnl = 0.0
+        for t in open_tranches:
+            r = engine.position_pnl(
+                t["entry_lev"], lev_now, t["entry_und"], und_now, short_size, long_size
+            )
+            open_pnl += r["net"]
+            borrow_paid += engine.borrow_cost(notional)
+
+        # 4. Equity = realized + open marks - borrow paid to date.
+        equity.append(realized_pnl + open_pnl - borrow_paid)
+        open_counts.append(len(open_tranches))
+
+    equity_curve = pd.Series(equity, index=dates, name="equity")
+    open_curve = pd.Series(open_counts, index=dates, name="open_tranches")
+    daily_pnl = equity_curve.diff()
+
+    return {
+        "equity_curve": equity_curve,
+        "daily_pnl": daily_pnl,
+        "open_tranches": open_curve,
+        "total_return": equity_curve.iloc[-1],
+        "max_drawdown": (equity_curve - equity_curve.cummax()).min(),
+        "worst_day": daily_pnl.min(),
+    }
