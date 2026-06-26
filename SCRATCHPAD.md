@@ -123,6 +123,32 @@ pairs, Sharpe/Sortino, longer history.
 
 ---
 
+### 2026-06-26 (viz upgrades)
+**Did:**
+- Added `plotly` dep (approved; pyproject + uv sync -> plotly 6.8.0).
+- backtest.run_backtest now also returns: `long_curve`/`short_curve` (per-leg cumulative
+  P/L, 0-based; sum to equity_curve since borrow=0), `lev_ohlc`/`und_ohlc` (OHLC slices for
+  candlesticks). Dropped the old close-only `lev_prices`/`und_prices`. New series are just
+  retained engine outputs -- no new P&L math.
+- app.py: candlestick charts (both assets) with trade entry/exit markers; FIXED the equity
+  curve mislabel -- now renders equity_curve + starting_capital (true $10k-based equity);
+  added long-vs-short P/L chart; added per-trade P/L bar chart (green/red) below the table.
+
+**Verified:**
+- Invariant long_curve + short_curve == equity_curve (max diff ~3.6e-12). Legs: long
+  +$8201.50, short -$7226.82, sum +$974.68 = total_return.
+- Equity offset: starts exactly $10,000, ends $10,974.68.
+- Figures build from real result (candlestick 3 traces, 235 bars 197g/38r). App boots
+  headless, no errors. verify_engine + verify_backtest both PASS.
+
+**Next:** v2 backlog -- real borrow fee (would shrink the curve), inverse-fund support,
+more pairs, Sharpe/Sortino.
+
+**Open questions / blockers:**
+- None.
+
+---
+
 ## Session template (copy this)
 
 ### YYYY-MM-DD 

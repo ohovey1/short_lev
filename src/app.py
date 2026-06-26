@@ -13,13 +13,47 @@ import sys
 # Make sibling modules importable however the script is launched.
 sys.path.insert(0, os.path.dirname(__file__))
 
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 import config
 import data
 import backtest
 
-DISCLAIMER = "Fees (incl. borrow) omitted -- results are optimistic and not a verdict."
+DISCLAIMER = "NOTE: Fees (including borrowing fees) are omitted -- results are optimistic and not a verdict."
+
+
+def price_chart(ohlc, title, candles):
+    """Price figure for an OHLC frame: candlestick if candles else a close line."""
+    if candles:
+        trace = go.Candlestick(
+            x=ohlc.index,
+            open=ohlc["open"], high=ohlc["high"],
+            low=ohlc["low"], close=ohlc["close"],
+            name=title,
+        )
+    else:
+        trace = go.Scatter(x=ohlc.index, y=ohlc["close"], mode="lines", name=title)
+    fig = go.Figure(trace)
+    fig.update_layout(
+        title=title, xaxis_rangeslider_visible=False, height=350,
+        margin=dict(l=0, r=0, t=30, b=0),
+    )
+    return fig
+
+
+def equity_chart(equity_dollars):
+    """Equity curve with the y-axis fit to the data (~5% padding) so the curve
+    fills the chart instead of being dwarfed by a 0-anchored axis."""
+    lo, hi = equity_dollars.min(), equity_dollars.max()
+    pad = (hi - lo) * 0.05 or 1.0  # avoid a zero-width range on a flat curve
+    fig = go.Figure(go.Scatter(x=equity_dollars.index, y=equity_dollars, mode="lines"))
+    fig.update_layout(
+        height=350, margin=dict(l=0, r=0, t=10, b=0), yaxis_title="Equity ($)",
+    )
+    fig.update_yaxes(range=[lo - pad, hi + pad])
+    return fig
 
 
 @st.cache_data
@@ -80,19 +114,35 @@ base_capital = st.sidebar.number_input(
     "Base capital ($)", min_value=100, value=10000, step=1000
 )
 
+chart_style = st.sidebar.radio("Price chart", ["Line", "Candlestick"], horizontal=True)
+candles = chart_style == "Candlestick"
+
 # --- Run + render ---
 result = run(underlying, hold_days, base_capital, lookback)
 
 pair = config.PAIRS[underlying]
+trades = result["trades"]
 
 st.subheader(f"{pair['underlying_ticker']} price (underlying)")
-st.line_chart(result["und_prices"].rename(pair["underlying_ticker"]))
+st.plotly_chart(
+    price_chart(result["und_ohlc"], pair["underlying_ticker"], candles),
+    use_container_width=True,
+)
 
 st.subheader(f"{pair['leveraged_ticker']} price (leveraged)")
-st.line_chart(result["lev_prices"].rename(pair["leveraged_ticker"]))
+st.plotly_chart(
+    price_chart(result["lev_ohlc"], pair["leveraged_ticker"], candles),
+    use_container_width=True,
+)
 
-st.subheader("Equity curve ($)")
-st.line_chart(result["equity_curve"])
+st.subheader("Long vs short P/L ($)")
+st.caption(
+    "Each leg's cumulative P/L. The legs are hedged -- short trends down, long up -- and "
+    "the gap between them is the decay edge that becomes total return."
+)
+st.line_chart(
+    pd.DataFrame({"Long P/L": result["long_curve"], "Short P/L": result["short_curve"]})
+)
 
 st.subheader("Metrics")
 c1, c2, c3 = st.columns(3)
@@ -104,9 +154,15 @@ c4.metric("Max drawdown", f"${result['max_drawdown']:,.2f}")
 c5.metric("Worst day", f"${result['worst_day']:,.2f}")
 c6.metric("Return %", f"{result['pct_return']:.2%}")
 
+st.subheader("Equity curve ($)")
+# Display offset only: equity = starting capital + cumulative P/L (not P&L math).
+st.plotly_chart(
+    equity_chart(result["equity_curve"] + result["starting_capital"]),
+    use_container_width=True,
+)
+
 st.subheader("Trades")
 st.caption("Each row is one tranche held to its full hold_days, closed at that day's prices.")
-trades = result["trades"]
 st.dataframe(
     trades,
     hide_index=True,
@@ -122,3 +178,15 @@ st.dataframe(
         "total_pnl": st.column_config.NumberColumn("Total P/L", format="$%.2f"),
     },
 )
+
+st.subheader("Trade P/L")
+if not trades.empty:
+    colors = ["green" if v >= 0 else "red" for v in trades["total_pnl"]]
+    bar = go.Figure(go.Bar(
+        x=trades["close_date"], y=trades["total_pnl"], marker_color=colors,
+    ))
+    bar.update_layout(
+        height=300, margin=dict(l=0, r=0, t=10, b=0),
+        yaxis_title="Total P/L ($)", xaxis_title="Close date",
+    )
+    st.plotly_chart(bar, use_container_width=True)

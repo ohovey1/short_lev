@@ -58,11 +58,15 @@ def run_backtest(underlying, hold_days, base_capital, price_field="close",
 
     open_tranches = []   # each: {entry_date, entry_lev, entry_und, age}
     realized_pnl = 0.0
+    realized_short = 0.0
+    realized_long = 0.0
     borrow_paid = 0.0
 
     equity = []
     open_counts = []
-    trades = []   # one row per fully-realized tranche (closed trade)
+    long_pts = []   # per-day cumulative long-leg P/L (realized + open marks)
+    short_pts = []  # per-day cumulative short-leg P/L
+    trades = []     # one row per fully-realized tranche (closed trade)
 
     n = len(dates)
     for i, date in enumerate(dates):
@@ -80,6 +84,8 @@ def run_backtest(underlying, hold_days, base_capital, price_field="close",
                     t["entry_lev"], lev_now, t["entry_und"], und_now, short_size, long_size
                 )
                 realized_pnl += r["net"]
+                realized_short += r["short_pnl"]
+                realized_long += r["long_pnl"]
                 trades.append({
                     "open_date": t["entry_date"],
                     "close_date": date,
@@ -104,33 +110,48 @@ def run_backtest(underlying, hold_days, base_capital, price_field="close",
                 {"entry_date": date, "entry_lev": lev_now, "entry_und": und_now, "age": 0}
             )
 
-        # 3. Mark every open tranche via the engine; sum their current P&L. Charge
-        #    borrow per open tranche per day (0 in v1, but kept in the equity).
+        # 3. Mark every open tranche via the engine; sum their current P&L, split by
+        #    leg. Charge borrow per open tranche per day (0 in v1, kept in equity).
         open_pnl = 0.0
+        open_short = 0.0
+        open_long = 0.0
         for t in open_tranches:
             r = engine.position_pnl(
                 t["entry_lev"], lev_now, t["entry_und"], und_now, short_size, long_size
             )
             open_pnl += r["net"]
+            open_short += r["short_pnl"]
+            open_long += r["long_pnl"]
             borrow_paid += engine.borrow_cost(notional)
 
-        # 4. Equity = realized + open marks - borrow paid to date.
+        # 4. Equity = realized + open marks - borrow paid to date. The per-leg curves
+        #    sum back to this (borrow = 0 in v1).
         equity.append(realized_pnl + open_pnl - borrow_paid)
+        short_pts.append(realized_short + open_short)
+        long_pts.append(realized_long + open_long)
         open_counts.append(len(open_tranches))
 
     equity_curve = pd.Series(equity, index=dates, name="equity")
     open_curve = pd.Series(open_counts, index=dates, name="open_tranches")
+    long_curve = pd.Series(long_pts, index=dates, name="long")
+    short_curve = pd.Series(short_pts, index=dates, name="short")
     daily_pnl = equity_curve.diff()
     trades_df = pd.DataFrame(trades)
 
+    ohlc_cols = ["open", "high", "low", "close"]
+    lev_ohlc = lev.loc[dates, ohlc_cols]
+    und_ohlc = und.loc[dates, ohlc_cols]
+
     total_return = equity_curve.iloc[-1]
     return {
-        "equity_curve": equity_curve,
+        "equity_curve": equity_curve,   # cumulative P/L ($), 0-based; UI adds base_capital
         "daily_pnl": daily_pnl,
         "open_tranches": open_curve,
+        "long_curve": long_curve,       # cumulative long-leg P/L ($), 0-based
+        "short_curve": short_curve,     # cumulative short-leg P/L ($), 0-based
         "trades": trades_df,
-        "lev_prices": lev_prices,
-        "und_prices": und_prices,
+        "lev_ohlc": lev_ohlc,
+        "und_ohlc": und_ohlc,
         "starting_capital": base_capital,
         "ending_capital": base_capital + total_return,
         "total_return": total_return,
