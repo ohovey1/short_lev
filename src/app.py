@@ -56,6 +56,20 @@ def equity_chart(equity_dollars):
     return fig
 
 
+def price_header(label, ohlc):
+    """Header row: chart label on the left, the asset's window return (close-to-
+    close) on the right, green for positive and red for negative."""
+    pct = ohlc["close"].iloc[-1] / ohlc["close"].iloc[0] - 1
+    color = "green" if pct >= 0 else "red"
+    left, right = st.columns([3, 1])
+    left.subheader(label)
+    right.markdown(
+        f"<div style='text-align:right; font-size:1.3rem; font-weight:600; "
+        f"color:{color}'>{pct:+.2%}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 @st.cache_data
 def run(underlying, hold_days, base_capital, lookback_days):
     """Cached wrapper so slider nudges don't recompute the loop needlessly."""
@@ -83,9 +97,6 @@ st.warning(DISCLAIMER)
 
 # --- Sidebar controls ---
 st.sidebar.header("Settings")
-
-# Link to the strategy explainer (its own page; default nav is hidden via config).
-st.sidebar.page_link("pages/Trade_Strategy.py", label="Trade Strategy")
 
 underlying = st.sidebar.selectbox(
     "Pair",
@@ -120,19 +131,23 @@ base_capital = st.sidebar.number_input(
 chart_style = st.sidebar.radio("Price chart", ["Line", "Candlestick"], horizontal=True)
 candles = chart_style == "Candlestick"
 
+# Docs section: link to the strategy explainer (its own page; default nav hidden).
+st.sidebar.header("Docs")
+st.sidebar.page_link("pages/Trade_Strategy.py", label="Trade Strategy")
+
 # --- Run + render ---
 result = run(underlying, hold_days, base_capital, lookback)
 
 pair = config.PAIRS[underlying]
 trades = result["trades"]
 
-st.subheader(f"{pair['underlying_ticker']} price (underlying)")
+price_header(f"{pair['underlying_ticker']} price (underlying)", result["und_ohlc"])
 st.plotly_chart(
     price_chart(result["und_ohlc"], pair["underlying_ticker"], candles),
     use_container_width=True,
 )
 
-st.subheader(f"{pair['leveraged_ticker']} price (leveraged)")
+price_header(f"{pair['leveraged_ticker']} price (leveraged)", result["lev_ohlc"])
 st.plotly_chart(
     price_chart(result["lev_ohlc"], pair["leveraged_ticker"], candles),
     use_container_width=True,

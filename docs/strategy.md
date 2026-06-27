@@ -16,6 +16,11 @@ Shorting a +3x fund gives -3x exposure to QQQ; the long QQQ leg adds +3x back. T
 two cancel, so the position is roughly **delta-neutral** -- it doesn't make or lose
 much from QQQ simply going up or down. What's left over is the decay.
 
+**When trades open and close (this demo):** a new tranche opens every trading day at
+that day's closing prices, and closes `hold_days` days later at that day's close --
+fixed timing, not signal-driven. The point is to study the decay over a steady
+schedule, so there are no entry/exit rules beyond the calendar.
+
 ## Multi-day holds
 Instead of resetting every day, we **open one tranche per day and hold it for a set
 number of days** (`hold_days`). On a normal day, `hold_days` tranches are open at
