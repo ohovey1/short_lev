@@ -22,9 +22,11 @@ import data
 import engine
 
 
-def run_backtest(underlying, hold_days, base_capital, price_field="close",
+def run_backtest(pair_key, hold_days, base_capital, price_field="close",
                  lookback_days=None):
     """Run the overlapping-tranche backtest for one pair.
+
+    pair_key indexes config.PAIRS (the leveraged ETF ticker).
 
     A tranche opened on day d is realized at the close of day d + hold_days, so
     on any mid-window day exactly hold_days tranches are open.
@@ -36,7 +38,7 @@ def run_backtest(underlying, hold_days, base_capital, price_field="close",
     Returns a dict with the equity curve (a pandas Series indexed by date), the
     daily P&L series, and metrics (total return, max drawdown, worst day).
     """
-    pair = config.PAIRS[underlying]
+    pair = config.PAIRS[pair_key]
     leverage = pair["leverage"]
 
     lev = data.get_prices(pair["leveraged_ticker"])

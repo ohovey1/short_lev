@@ -33,19 +33,19 @@ import data
 import engine
 import backtest
 
-UNDERLYING = "QQQ"
+PAIR_KEY = "TQQQ"
 HOLD_DAYS = 3
 BASE_CAPITAL = 10000.0
 
 
-def independent_equity_curve(underlying, hold_days, base_capital):
+def independent_equity_curve(pair_key, hold_days, base_capital):
     """Re-derive the equity curve from scratch, separate from backtest.py.
 
     Same rules (open one tranche/day, taper the tail, realize at d+hold_days,
     mark-to-market equity) but written independently so agreement is meaningful.
     Returns a list of (date, equity, open_count) tuples.
     """
-    pair = config.PAIRS[underlying]
+    pair = config.PAIRS[pair_key]
     leverage = pair["leverage"]
     lev = data.get_prices(pair["leveraged_ticker"])["close"]
     und = data.get_prices(pair["underlying_ticker"])["close"]
@@ -92,14 +92,14 @@ def independent_equity_curve(underlying, hold_days, base_capital):
 
 
 def main():
-    print(f"Verifying backtest tranche lifecycle: {UNDERLYING}, hold_days={HOLD_DAYS}, "
+    print(f"Verifying backtest tranche lifecycle: {PAIR_KEY}, hold_days={HOLD_DAYS}, "
           f"base_capital=${BASE_CAPITAL:,.0f}\n")
 
-    result = backtest.run_backtest(UNDERLYING, HOLD_DAYS, BASE_CAPITAL)
+    result = backtest.run_backtest(PAIR_KEY, HOLD_DAYS, BASE_CAPITAL)
     bt_equity = result["equity_curve"]
     bt_open = result["open_tranches"]
 
-    expected = independent_equity_curve(UNDERLYING, HOLD_DAYS, BASE_CAPITAL)
+    expected = independent_equity_curve(PAIR_KEY, HOLD_DAYS, BASE_CAPITAL)
 
     assert len(expected) == len(bt_equity), "length mismatch"
 
@@ -112,7 +112,7 @@ def main():
             open_mismatches += 1
 
     # Trace one concrete tranche so the lifecycle is human-readable.
-    pair = config.PAIRS[UNDERLYING]
+    pair = config.PAIRS[PAIR_KEY]
     lev = data.get_prices(pair["leveraged_ticker"])["close"]
     und = data.get_prices(pair["underlying_ticker"])["close"]
     dates = list(lev.index.intersection(und.index).sort_values())

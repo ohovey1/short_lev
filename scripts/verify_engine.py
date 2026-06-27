@@ -26,7 +26,7 @@ import config
 import data
 import engine
 
-PAIR = config.PAIRS["QQQ"]
+PAIR = config.PAIRS["TQQQ"]
 LEV_TICKER = PAIR["leveraged_ticker"]       # e.g. TQQQ; sourced from the registry
 UND_TICKER = PAIR["underlying_ticker"]      # e.g. QQQ
 

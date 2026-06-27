@@ -71,17 +71,17 @@ def price_header(label, ohlc):
 
 
 @st.cache_data
-def run(underlying, hold_days, base_capital, lookback_days):
+def run(pair_key, hold_days, base_capital, lookback_days):
     """Cached wrapper so slider nudges don't recompute the loop needlessly."""
     return backtest.run_backtest(
-        underlying, hold_days, base_capital, lookback_days=lookback_days
+        pair_key, hold_days, base_capital, lookback_days=lookback_days
     )
 
 
 @st.cache_data
-def window_length(underlying):
+def window_length(pair_key):
     """Number of aligned trading days available for a pair (for slider bounds)."""
-    pair = config.PAIRS[underlying]
+    pair = config.PAIRS[pair_key]
     lev = data.get_prices(pair["leveraged_ticker"])
     und = data.get_prices(pair["underlying_ticker"])
     return len(lev.index.intersection(und.index))
@@ -98,13 +98,13 @@ st.warning(DISCLAIMER)
 # --- Sidebar controls ---
 st.sidebar.header("Settings")
 
-underlying = st.sidebar.selectbox(
+pair_key = st.sidebar.selectbox(
     "Pair",
     list(config.PAIRS.keys()),
-    format_func=lambda u: f"{config.PAIRS[u]['leveraged_ticker']} / {u}",
+    format_func=lambda k: f"{k} / {config.PAIRS[k]['underlying_ticker']}",
 )
 
-n_days = window_length(underlying)
+n_days = window_length(pair_key)
 
 # Preset lookback windows (trading days). "Max" uses the full cached window.
 LOOKBACK_PRESETS = [30, 60, 120, 240, 360]
@@ -136,9 +136,9 @@ st.sidebar.header("Docs")
 st.sidebar.page_link("pages/Trade_Strategy.py", label="Trade Strategy")
 
 # --- Run + render ---
-result = run(underlying, hold_days, base_capital, lookback)
+result = run(pair_key, hold_days, base_capital, lookback)
 
-pair = config.PAIRS[underlying]
+pair = config.PAIRS[pair_key]
 trades = result["trades"]
 
 price_header(f"{pair['underlying_ticker']} price (underlying)", result["und_ohlc"])

@@ -71,12 +71,24 @@ the curve.
 - Support inverse funds (e.g. SQQQ) via signed leverage in config: store leverage with a
   sign and size/direct the hedge from it, so inverse and long funds are both delta-neutral.
   (v1 assumes positive-leverage funds only; shorting them hedges the long underlying.)
-- Fill in the borrow-fee stub (daily borrow charge on the short leg).
-- Add expense ratio, spread, dividends.
-- More pairs in the registry (SPY/SPXU, IWM/TZA, etc.).
+  - **Motivating experiment (delta-neutrality control):** the clean inverse-QQQ test is
+    `short SQQQ + SHORT QQQ` (NOT long QQQ -- that's +6x double-long). One decay source,
+    true mirror of QQQ/TQQQ. If the strategy is delta-neutral, it should profit too; if the
+    bull-pair returns were just beta, it should not. Needs the signed-leverage logic above.
+  - Separate idea (different strategy, log don't conflate): `short SQQQ + long $3X PSQ`
+    avoids shorting the underlying but adds a 2nd decay source (PSQ); and a both-leveraged
+    `short TQQQ + long SQQQ` double-decay short-vol variant.
+- Fill in the borrow-fee stub (daily borrow charge on the short leg). NOTE: the LETF's
+  expense ratio is already in its historical price -- do NOT add it (would double-count).
+  Borrow fee is the cost WE pay to short, and is the missing real cost.
+- Add expense ratio as reference data only (to sort/test the high-fee hypothesis), spread,
+  dividends.
+- More pairs: inverse pairs once signed leverage exists (SPXU, TZA, SQQQ).
 - Longer history (swap data source to a paid/keyed tier with multi-year coverage).
 - Sharpe / Sortino, rolling stats.
 - Parameterize rebalance frequency (daily is hardcoded in v1).
+- Data layer: add rate-limit handling (Polygon free tier ~5 req/min; pre-warming many
+  tickers at once trips HTTP 429). Currently mitigated by fetch-once-then-cache.
 
 ## Open decisions
 - (none currently — log new ones in SCRATCHPAD.md)

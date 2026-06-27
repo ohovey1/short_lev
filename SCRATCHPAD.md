@@ -149,6 +149,40 @@ more pairs, Sharpe/Sortino.
 
 ---
 
+### 2026-06-27 (expand pair universe to 10)
+**Did:**
+- Expanded PAIRS from 1 to 10 bull (positive-leverage) pairs. Rekeyed the dict by the
+  LEVERAGED ticker (was the underlying) because two pairs share an underlying (TQQQ & QLD
+  on QQQ; UPRO & SSO on SPY). Updated callers: backtest run_backtest param underlying ->
+  pair_key; app dropdown format_func and var; both verify scripts (key "QQQ" -> "TQQQ").
+- No engine/logging/borrow changes -- pure universe expansion, per scope.
+- Pairs: TQQQ/QQQ, UPRO/SPY, UDOW/DIA, TNA/IWM, TMF/TLT (3x indices+bonds);
+  SOXL/SOXX, FAS/XLF, ERX/XLE (sectors); QLD/QQQ, SSO/SPY (2x contrasts). All 16 new
+  tickers data-validated on Polygon (501 rows each). Fetching all at once trips the free
+  tier's ~5 req/min (HTTP 429) -- paced with sleeps; cache makes it one-time.
+
+**Early findings (240d, hold_days=5, no fees, bull market):**
+- Leverage: 3x harvests ~2x the decay of 2x on the same underlying (TQQQ +9.75% vs QLD
+  +4.58%; UPRO +7.95% vs SSO +3.87%). Supports the leverage hypothesis.
+- Volatility: high-vol sectors dominate (FAS +15.44%, SOXL +14.28%) vs calm bonds (TMF
+  +1.71%). Supports vol -> decay.
+- CAVEAT: all bull funds in an up market, no fees -> can't yet separate decay from beta.
+  The inverse-QQQ delta-neutrality control (short SQQQ + SHORT QQQ) is the experiment that
+  would, and it needs v2 signed leverage. Logged in ROADMAP.
+
+**Decisions:**
+- PAIRS keyed by leveraged ticker. Inverse delta-neutrality test = short SQQQ + short QQQ
+  (clean), not the PSQ long-inverse version (2nd decay source). Both logged for v2.
+- Expense ratio is already in the LETF price; do NOT add it. Borrow fee (what we pay to
+  short) is the real missing cost -- still a stub, still deferred.
+
+**Next:** v2 -- signed leverage (unlocks the inverse delta-neutrality test), then borrow fee.
+
+**Open questions / blockers:**
+- None.
+
+---
+
 ## Session template (copy this)
 
 ### YYYY-MM-DD 
