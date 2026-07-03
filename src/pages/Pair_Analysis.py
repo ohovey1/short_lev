@@ -1,10 +1,12 @@
 """Cross-pair leaderboard: one row per pair in config.PAIRS.
 
 Reached via the sidebar (default multipage nav is hidden). Runs the backtest
-twice per pair -- once at zero borrow (gross) and once at each pair's config
-borrow rate, or one overridden rate for every pair if the sidebar override is
-on (net) -- and tables the comparison. Presentation only: every number comes
-from backtest.run_backtest or engine.breakeven_borrow_rate, no P&L math here.
+twice per pair -- once at zero borrow (gross) and once at a net borrow rate --
+and tables the comparison. The net rate per pair is, in order of precedence:
+the sidebar override (one rate for all pairs), the live IBKR indicative rate
+for the leveraged ticker (data.get_borrow_rates), or the config fallback rate.
+Presentation only: every number comes from backtest.run_backtest or
+engine.breakeven_borrow_rate, no P&L math here.
 """
 
 import os
@@ -17,6 +19,7 @@ import streamlit as st
 
 import config
 import backtest
+import data
 import engine
 
 st.set_page_config(layout="wide")
@@ -24,9 +27,9 @@ st.set_page_config(layout="wide")
 st.page_link("app.py", label="< Back to backtest")
 st.title("Pair leaderboard")
 st.write(
-    "Every pair in the registry, run once gross (zero borrow) and once net (each "
-    "pair's configured borrow rate, or one overridden rate for all pairs if set below). "
-    "Sortable -- click a column header."
+    "Every pair in the registry, run once gross (zero borrow) and once net (the "
+    "live IBKR borrow rate where available, else the config rate; or one overridden "
+    "rate for all pairs if set below). Sortable -- click a column header."
 )
 st.warning(
     "NOTE: Borrow cost uses indicative annual rates (see config.py) -- hand-refresh "
@@ -71,12 +74,34 @@ if override_borrow:
     ) / 100
 
 
+@st.cache_data(ttl="1h")
+def borrow_rates():
+    """Session cache over data.get_borrow_rates so a failed fetch (None) is not
+    retried -- with its FTP timeout -- on every Streamlit rerun."""
+    return data.get_borrow_rates()
+
+
+rates = borrow_rates()
+
+# Live rate per pair, keyed by the leveraged ticker (the leg we short and pay
+# borrow on). Pairs missing from the IBKR list fall back to config.
+live = {}
+if rates is not None:
+    for _pair_key in config.PAIRS:
+        if _pair_key in rates.index:
+            live[_pair_key] = {
+                "rate": float(rates.loc[_pair_key, "fee_rate"]),
+                "available": int(rates.loc[_pair_key, "available"]),
+            }
+
+
 @st.cache_data
-def leaderboard(hold_days, base_capital, lookback_days, borrow_rate_annual):
+def leaderboard(hold_days, base_capital, lookback_days, borrow_rate_annual, live):
     """Gross + net backtest for every pair, tabled into one leaderboard row each.
 
-    borrow_rate_annual=None means "use each pair's own config rate" for the net
-    run; a float overrides every pair's net run to that one rate.
+    Net-rate precedence per pair: borrow_rate_annual (the all-pairs override)
+    if not None, else the pair's live rate from the live dict, else the pair's
+    config rate.
     """
     rows = []
     for pair_key, pair in config.PAIRS.items():
@@ -84,7 +109,12 @@ def leaderboard(hold_days, base_capital, lookback_days, borrow_rate_annual):
             pair_key, hold_days, base_capital,
             lookback_days=lookback_days, borrow_rate_annual=0.0,
         )
-        net_rate = pair["borrow_rate_annual"] if borrow_rate_annual is None else borrow_rate_annual
+        if borrow_rate_annual is not None:
+            net_rate, source = borrow_rate_annual, "override"
+        elif pair_key in live:
+            net_rate, source = live[pair_key]["rate"], "live"
+        else:
+            net_rate, source = pair["borrow_rate_annual"], "config fallback"
         net = backtest.run_backtest(
             pair_key, hold_days, base_capital,
             lookback_days=lookback_days, borrow_rate_annual=net_rate,
@@ -97,6 +127,8 @@ def leaderboard(hold_days, base_capital, lookback_days, borrow_rate_annual):
             "Borrow paid ($)": net["borrow_paid"],
             "Max drawdown %": net["max_drawdown"] / base_capital * 100,
             "Worst day %": net["worst_day"] / base_capital * 100,
+            "Rate source": source,
+            "Shares available": live[pair_key]["available"] if pair_key in live else None,
             "Borrow rate (used) %": net_rate * 100,
             "Breakeven borrow rate % (annualized)": engine.breakeven_borrow_rate(
                 gross["total_return"], gross["notional_days"]
@@ -105,7 +137,14 @@ def leaderboard(hold_days, base_capital, lookback_days, borrow_rate_annual):
     return pd.DataFrame(rows)
 
 
-df = leaderboard(hold_days, base_capital, lookback_days, borrow_rate_annual)
+if rates is not None:
+    st.caption(f"Live IBKR indicative borrow rates fetched {rates['fetched_at'].iloc[0]}.")
+else:
+    st.warning(
+        "Live IBKR borrow rates unavailable -- all rows use config fallback rates."
+    )
+
+df = leaderboard(hold_days, base_capital, lookback_days, borrow_rate_annual, live)
 df = df.sort_values("Net return %", ascending=False)
 
 st.dataframe(
@@ -117,6 +156,7 @@ st.dataframe(
         "Borrow paid ($)": st.column_config.NumberColumn(format="$%.2f"),
         "Max drawdown %": st.column_config.NumberColumn(format="%.2f%%"),
         "Worst day %": st.column_config.NumberColumn(format="%.2f%%"),
+        "Shares available": st.column_config.NumberColumn(format="%.0f"),
         "Borrow rate (used) %": st.column_config.NumberColumn(format="%.2f%%"),
         "Breakeven borrow rate % (annualized)": st.column_config.NumberColumn(format="%.2f%%"),
     },
