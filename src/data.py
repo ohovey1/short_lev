@@ -3,10 +3,15 @@
 get_prices(ticker) is the public seam. It reads the cache if present and
 otherwise fetches via _fetch_polygon. Swapping data sources = writing a new
 _fetch_* and pointing get_prices at it.
+
+get_borrow_rates() is the second seam: IBKR indicative short-borrow rates,
+same cache-first pattern but time-limited (12 hours) since rates move daily.
 """
 
 import datetime
+import io
 import os
+import urllib.request
 
 import pandas as pd
 import requests
@@ -17,6 +22,14 @@ load_dotenv()
 # Anchor the cache to the project root (parent of src/) so it resolves the same
 # regardless of the process working directory.
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache")
+
+BORROW_CACHE = os.path.join(CACHE_DIR, "borrow_rates.csv")
+BORROW_CACHE_MAX_AGE = datetime.timedelta(hours=12)
+
+# Official IBKR shortstock mirrors serving the same usa.txt. ftp2 is tried
+# first because ftp3 timed out from the dev network when this was built; the
+# second host is the fallback if the first is down.
+IBKR_BORROW_HOSTS = ["ftp2.interactivebrokers.com", "ftp3.interactivebrokers.com"]
 
 
 def get_prices(ticker):
@@ -33,6 +46,68 @@ def get_prices(ticker):
     os.makedirs(CACHE_DIR, exist_ok=True)
     df.to_csv(path)
     return df
+
+
+def get_borrow_rates():
+    """Return IBKR indicative borrow rates, or None if unavailable.
+
+    DataFrame indexed by ticker with columns fee_rate (annualized fraction,
+    e.g. 0.0523), available (int shares), and fetched_at (ISO timestamp of the
+    download, same on every row -- the UI shows it). Cache-first like
+    get_prices, but the cache expires after 12 hours. On any fetch failure
+    (FTP down, parse error) returns None -- callers fall back to config rates.
+    """
+    if os.path.exists(BORROW_CACHE):
+        try:
+            cached = pd.read_csv(BORROW_CACHE, index_col="ticker")
+            fetched_at = datetime.datetime.fromisoformat(cached["fetched_at"].iloc[0])
+            if datetime.datetime.now() - fetched_at < BORROW_CACHE_MAX_AGE:
+                return cached
+        except Exception:
+            pass  # unreadable cache -- fall through and refetch
+
+    try:
+        df = _fetch_ibkr_borrow()
+    except Exception:
+        return None
+    df["fetched_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    df.to_csv(BORROW_CACHE)
+    return df
+
+
+def _fetch_ibkr_borrow():
+    """Download IBKR's public short-stock list (usa.txt) and parse it.
+
+    Pipe-delimited. Line 1 is a #BOF stamp (skipped), line 2 is the column
+    header (#SYM|...|FEERATE|AVAILABLE|...), the last line is an #EOF footer
+    (dropped when its FEERATE fails numeric coercion). FEERATE is in PERCENT
+    -- divided by 100 here so fee_rate is an annualized fraction. AVAILABLE
+    can be ">10000000"; the ">" is stripped.
+    """
+    raw = None
+    for host in IBKR_BORROW_HOSTS:
+        try:
+            url = f"ftp://shortstock:@{host}/usa.txt"
+            with urllib.request.urlopen(url, timeout=15) as resp:
+                raw = resp.read()
+            break
+        except Exception:
+            continue
+    if raw is None:
+        raise ConnectionError("all IBKR borrow FTP hosts failed")
+
+    df = pd.read_csv(io.BytesIO(raw), sep="|", skiprows=1, dtype=str,
+                     encoding="latin-1")
+    df = df.rename(columns={"#SYM": "ticker", "FEERATE": "fee_rate",
+                            "AVAILABLE": "available"})
+    df = df[["ticker", "fee_rate", "available"]]
+    df["fee_rate"] = pd.to_numeric(df["fee_rate"], errors="coerce") / 100
+    df["available"] = pd.to_numeric(df["available"].str.lstrip(">"), errors="coerce")
+    df = df.dropna(subset=["fee_rate"])
+    df["available"] = df["available"].fillna(0).astype("int64")
+    df = df.set_index("ticker")
+    return df[~df.index.duplicated()]
 
 
 def _fetch_polygon(ticker):
