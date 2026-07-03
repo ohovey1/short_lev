@@ -6,6 +6,58 @@ Each entry: what changed, what's next, open questions/blockers.
 
 ---
 
+### 2026-07-03 (live IBKR borrow rates on the leaderboard)
+**Did:**
+- `data.get_borrow_rates()`: IBKR indicative borrow rates, DataFrame indexed by ticker
+  with fee_rate, available, fetched_at. `_fetch_ibkr_borrow()` downloads usa.txt from
+  IBKR's public shortstock FTP (user "shortstock", empty password, pipe-delimited;
+  line 1 = #BOF stamp, line 2 = column header, last line = #EOF footer). Cache
+  `cache/borrow_rates.csv` reused under 12 hours; any fetch/parse failure returns None
+  and callers fall back to config rates.
+- **CONVENTION -- FEERATE is in PERCENT in the raw file** (e.g. TQQQ "0.8175" means
+  0.8175%/yr). `_fetch_ibkr_borrow` divides by 100 once, so `fee_rate` everywhere
+  downstream (cache, history, page, backtest calls) is an annualized FRACTION
+  (0.008175), matching config's `borrow_rate_annual` convention. Do not divide again.
+  AVAILABLE can be ">10000000" -- the ">" is stripped before int conversion.
+- Host note: the spec named ftp3.interactivebrokers.com but it times out from this
+  network (port-21 probe confirmed); ftp2.interactivebrokers.com serves the identical
+  file. `IBKR_BORROW_HOSTS` tries ftp2 first, ftp3 as fallback -- flip the list if that
+  ever inverts.
+- Pair_Analysis.py: net-rate precedence per pair = sidebar override > live rate for the
+  leveraged ticker > config fallback. New "Rate source" and "Shares available" columns
+  (placed before "Borrow rate (used) %" so the used rate stays beside breakeven);
+  caption shows the fetch timestamp, warning shown when falling back to config. A
+  st.cache_data(ttl="1h") wrapper around get_borrow_rates keeps a failed fetch from
+  re-paying the FTP timeout on every rerun.
+- Passive history: every successful fetch appends one row per PAIRS ticker (date,
+  ticker, fee_rate, available) to `cache/borrow_history.csv`, skipping tickers already
+  logged today. No reader yet -- accrues for future time-varying-borrow backfill.
+- Engine/backtest untouched, per scope.
+
+**Verified:**
+- Gate 1: TQQQ 0.82% / UPRO 1.28% (index funds well under 5%); second call within 12h
+  read the cache (0.03s with the host list deliberately broken); no cache + no host ->
+  None.
+- Gate 2: all 13 rows source=live with FTP reachable; TQQQ hand-check gross - net =
+  53.364583 = notional_days * 0.008175 / 360 = borrow_paid exactly; with cache moved
+  aside + hosts broken the page renders all rows on config rates with the warning.
+- Gate 3: fresh fetch -> exactly 13 history rows for today; same-day refetch (rates
+  cache deleted, history kept) -> still 13, no duplicates.
+- verify_engine.py + verify_backtest.py pass; app boots headless, both pages 200.
+- Live rates vs config placeholders diverge notably: TNA 6.98% live vs 1% config,
+  UDOW 4.84%, SOXL 5.70%, ERX 5.71% -- net returns on the leaderboard shifted down
+  accordingly for those pairs.
+
+**Next:**
+- Let borrow_history.csv accrue; then a reader for time-varying borrow in the backtest
+  (logged in ROADMAP).
+- Consider surfacing the live rate on the main page's borrow slider default too.
+
+**Open questions / blockers:**
+- None.
+
+---
+
 ### 2026-07-03 (leaderboard fixes: percent formatting, config-rate column, drawdown as %)
 **Did:**
 - Fixed a percent-formatting bug in `src/pages/Pair_Analysis.py`: `Gross return %` and

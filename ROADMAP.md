@@ -99,6 +99,14 @@ the curve.
 - [x] Cross-pair leaderboard page added 2026-07-03 (`src/pages/Pair_Analysis.py`): gross
   vs net return, borrow paid, max drawdown, worst day, and an analytic breakeven borrow
   rate (`engine.breakeven_borrow_rate`) for every pair in one sortable table.
+- [x] Live IBKR indicative borrow rates added 2026-07-03: `data.get_borrow_rates()`
+  fetches IBKR's public shortstock list (12h cache, None on failure); the leaderboard
+  uses live rates per leveraged ticker with config fallback and shows rate source +
+  shares available; every successful fetch also appends per-pair rows to
+  `cache/borrow_history.csv` (passive accrual, no reader yet -- future backfill work).
+  The config rates are now the fallback tier only. Engine/backtest untouched.
+- Borrow-history reader: once `cache/borrow_history.csv` has accrued a few weeks of
+  rows, backtest with time-varying borrow instead of one flat rate per run.
 
 ## Open decisions
 - (none currently — log new ones in SCRATCHPAD.md)
