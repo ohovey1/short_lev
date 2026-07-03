@@ -17,6 +17,8 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+import config
+
 load_dotenv()
 
 # Anchor the cache to the project root (parent of src/) so it resolves the same
@@ -24,6 +26,7 @@ load_dotenv()
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache")
 
 BORROW_CACHE = os.path.join(CACHE_DIR, "borrow_rates.csv")
+BORROW_HISTORY = os.path.join(CACHE_DIR, "borrow_history.csv")
 BORROW_CACHE_MAX_AGE = datetime.timedelta(hours=12)
 
 # Official IBKR shortstock mirrors serving the same usa.txt. ftp2 is tried
@@ -73,7 +76,37 @@ def get_borrow_rates():
     df["fetched_at"] = datetime.datetime.now().isoformat(timespec="seconds")
     os.makedirs(CACHE_DIR, exist_ok=True)
     df.to_csv(BORROW_CACHE)
+    _append_borrow_history(df)
     return df
+
+
+def _append_borrow_history(rates):
+    """Log today's rate per PAIRS ticker to cache/borrow_history.csv.
+
+    Passive accrual for future backfill work -- nothing reads this file yet.
+    One row (date, ticker, fee_rate, available) per leveraged ticker per day;
+    a ticker already logged today is skipped, so refetching within a day does
+    not duplicate rows.
+    """
+    today = datetime.date.today().isoformat()
+    logged = set()
+    if os.path.exists(BORROW_HISTORY):
+        hist = pd.read_csv(BORROW_HISTORY, dtype=str)
+        logged = set(hist.loc[hist["date"] == today, "ticker"])
+
+    rows = [
+        {"date": today, "ticker": t,
+         "fee_rate": rates.loc[t, "fee_rate"],
+         "available": rates.loc[t, "available"]}
+        for t in config.PAIRS
+        if t not in logged and t in rates.index
+    ]
+    if not rows:
+        return
+    pd.DataFrame(rows).to_csv(
+        BORROW_HISTORY, mode="a", header=not os.path.exists(BORROW_HISTORY),
+        index=False,
+    )
 
 
 def _fetch_ibkr_borrow():
