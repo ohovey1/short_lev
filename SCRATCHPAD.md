@@ -6,6 +6,62 @@ Each entry: what changed, what's next, open questions/blockers.
 
 ---
 
+### 2026-07-03 (borrow fee, single-stock pairs, leaderboard)
+**Did:**
+- Filled in the borrow-fee stub (v2 item). `engine.borrow_cost(notional, rate_annual,
+  days=1)` now returns `notional * rate_annual * days / 360` (was a 0.0 stub).
+  `config.PAIRS` gained `borrow_rate_annual` per pair -- indicative placeholders (0.01
+  index/2x pairs, 0.02 TMF, 0.03 sectors, 0.10 single-stocks), flagged for hand-refresh
+  from IBKR/iBorrowDesk. `backtest.run_backtest` gained `borrow_rate_annual=None`
+  (defaults to the pair's config value), charges borrow per open tranche per day, and
+  returns `borrow_paid` + `notional_days`. `app.py` got a borrow-rate slider (0-30%,
+  default = pair's config rate) and a "Borrow paid" metric; updated the disclaimer since
+  borrow is no longer omitted (expense ratio/spread/dividends still are).
+- Added three single-stock 2x pairs to `config.PAIRS`: NVDL/NVDA, TSLL/TSLA, CONL/COIN,
+  borrow_rate_annual 0.10. No code changes needed -- get_prices/position_pnl/backtest are
+  ticker-agnostic to stock vs ETF underlyings. All six new tickers (three leveraged +
+  three underlying) fetched from Polygon and cached (501 rows each), paced 15s apart to
+  stay under the free-tier ~5 req/min limit.
+- New page `src/pages/Pair_Analysis.py`: cross-pair leaderboard. Same controls as
+  app.py (hold_days, lookback_days, base_capital). Runs every pair in config.PAIRS twice
+  (borrow_rate_annual=0.0 for gross, the pair's config rate for net), tables pair,
+  leverage, gross %, net %, borrow paid, max drawdown, worst day, and a breakeven borrow
+  rate. Breakeven is analytic (new `engine.breakeven_borrow_rate(gross_pnl,
+  notional_days)` = `gross_pnl / (notional_days / 360)`), not searched -- borrow scales
+  linearly in rate so the closed form is exact. Cached via `st.cache_data` keyed on the
+  controls. Sorted net % descending by default; no charts (table is the v1 deliverable).
+  Linked from app.py's sidebar.
+
+**Verified:**
+- Borrow gate: rate=0 -> borrow_paid=0, total_return identical to pre-change output.
+  Raising the slider (0/5/10/20%) degrades total_return monotonically; borrow_paid scales
+  exactly linearly with rate (76.39 -> 152.78 -> 305.56 as rate doubles 5%->10%->20%).
+- `scripts/verify_backtest.py` updated to pass `borrow_rate_annual=0.0` explicitly (its
+  independent re-derivation doesn't model borrow) -- passes again after the update.
+  `scripts/verify_engine.py` unaffected, still passes.
+- Single-stock pairs: backtest runs cleanly for all three (NVDL/TSLL/CONL), sane
+  metrics, no errors.
+- Leaderboard gate: all 13 pairs render (10 original + 3 new); gross-minus-net in dollars
+  equals borrow_paid exactly for every pair spot-checked; TQQQ's computed breakeven rate
+  (14.93%) plugged into the main page's borrow slider drives TQQQ's total_return to
+  ~0 (1e-13, float noise).
+- App boots headless on both pages (main + leaderboard), HTTP 200, no tracebacks.
+
+**Decisions:**
+- Borrow accrual convention: simple daily interest on a 360-day basis (money-market
+  convention), matching the task's stated formula. No compounding.
+- Kept the leverage-label UI fix from the prior session (`SSO price (2x leveraged)`)
+  bundled into the borrow-stub commit since it was a small uncommitted leftover in the
+  same file.
+
+**Next:** v2 backlog -- signed leverage (inverse funds / the delta-neutrality control
+experiment), expense ratio as reference data, longer history, Sharpe/Sortino.
+
+**Open questions / blockers:**
+- None.
+
+---
+
 ### 2026-06-26
 **Did:**
 - Built layer 1 (data). `config.py`: `PAIRS` registry seeded with QQQ -> SQQQ/QQQ/3.

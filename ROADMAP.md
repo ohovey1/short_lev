@@ -78,17 +78,27 @@ the curve.
   - Separate idea (different strategy, log don't conflate): `short SQQQ + long $3X PSQ`
     avoids shorting the underlying but adds a 2nd decay source (PSQ); and a both-leveraged
     `short TQQQ + long SQQQ` double-decay short-vol variant.
-- Fill in the borrow-fee stub (daily borrow charge on the short leg). NOTE: the LETF's
+- [x] Fill in the borrow-fee stub (daily borrow charge on the short leg). NOTE: the LETF's
   expense ratio is already in its historical price -- do NOT add it (would double-count).
-  Borrow fee is the cost WE pay to short, and is the missing real cost.
+  Borrow fee is the cost WE pay to short, and is the missing real cost. DONE
+  2026-07-03: `engine.borrow_cost` charges `notional * rate_annual * days / 360`;
+  `config.PAIRS` carries an indicative `borrow_rate_annual` per pair (hand-refresh from
+  IBKR/iBorrowDesk); `backtest.run_backtest` takes `borrow_rate_annual` (defaults to the
+  pair's config value) and returns `borrow_paid` + `notional_days`; app.py has a rate
+  slider and a borrow-paid metric.
 - Add expense ratio as reference data only (to sort/test the high-fee hypothesis), spread,
   dividends.
 - More pairs: inverse pairs once signed leverage exists (SPXU, TZA, SQQQ).
+  - [x] Single-stock 2x pairs added 2026-07-03 (NVDL/NVDA, TSLL/TSLA, CONL/COIN,
+    borrow_rate_annual 0.10) -- no code changes needed, architecture is ticker-agnostic.
 - Longer history (swap data source to a paid/keyed tier with multi-year coverage).
 - Sharpe / Sortino, rolling stats.
 - Parameterize rebalance frequency (daily is hardcoded in v1).
 - Data layer: add rate-limit handling (Polygon free tier ~5 req/min; pre-warming many
   tickers at once trips HTTP 429). Currently mitigated by fetch-once-then-cache.
+- [x] Cross-pair leaderboard page added 2026-07-03 (`src/pages/Pair_Analysis.py`): gross
+  vs net return, borrow paid, max drawdown, worst day, and an analytic breakeven borrow
+  rate (`engine.breakeven_borrow_rate`) for every pair in one sortable table.
 
 ## Open decisions
 - (none currently — log new ones in SCRATCHPAD.md)
