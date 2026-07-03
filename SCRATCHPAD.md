@@ -6,6 +6,56 @@ Each entry: what changed, what's next, open questions/blockers.
 
 ---
 
+### 2026-07-03 (leaderboard fixes: percent formatting, config-rate column, drawdown as %)
+**Did:**
+- Fixed a percent-formatting bug in `src/pages/Pair_Analysis.py`: `Gross return %` and
+  `Net return %` stored raw fractions (e.g. 0.1544) but the column_config used a printf
+  format (`"%.2f%%"`), which does NOT auto-multiply by 100 the way Python's `.2%`
+  string-format does -- so 0.1544 rendered as "0.15%" instead of "15.44%". Fix: store
+  every percent column pre-multiplied by 100 (matching the convention the breakeven
+  column already used), keep the same `"%.2f%%"` column_config format. **Applies
+  generally: any NumberColumn with a printf-style format string needs the value already
+  scaled -- st's `format="percent"` auto-scales, printf formats do not.** Watch for this
+  again if a new percent column is added here or elsewhere.
+- Added `Borrow rate (config) %` column (from `pair["borrow_rate_annual"]`), placed
+  immediately left of the renamed `Breakeven borrow rate % (annualized)` column, so the
+  two sit side by side for comparison.
+- Changed `Max drawdown` and `Worst day` from dollars to percent of `base_capital`
+  (`net["max_drawdown"] / base_capital * 100`, same for worst_day), formatted like the
+  other percent columns. `Borrow paid` stays in dollars (the one column that should
+  scale with base_capital rather than stay fixed).
+- Added one sentence to the page's warning note explaining the breakeven column: "the
+  annualized borrow rate at which the pair's net P&L is zero; the pair is only viable if
+  real borrow is below this."
+- Made the sidebar uniform with the main page: lookback is now the same preset radio
+  (30/60/120/240/360/Max; no cross-pair data cap -- shorter-history pairs just truncate),
+  hold_days slider bounds derive from the preset like app.py, and a new "Override borrow
+  rate for all pairs" checkbox reveals the same 0-30% slider (default off = each pair's
+  config rate). Column renamed "Borrow rate (config) %" -> "Borrow rate (used) %" since
+  it can now show the override. Invariant re-verified in both modes: any pair whose used
+  rate exceeds its breakeven shows net return <= 0 (checked at a forced 25% override).
+
+**Verified:**
+- Gate 1: leaderboard's gross run (`borrow_rate_annual=0.0`) produces the exact same
+  `pct_return` as the main page's `run_backtest` called with `borrow_rate_annual=0.0` for
+  the same pair/settings (TQQQ, hold_days=5, lookback=240, base=10000) -- exact float
+  match.
+- Gate 2: spot-checked all 13 pairs -- ERX is the only pair where config rate (3.00%)
+  exceeds its breakeven rate (1.79%), and its net return is indeed negative (-0.79%);
+  every other pair has config rate below breakeven and positive net return.
+- Gate 3: doubling `base_capital` (10000 -> 20000) leaves `Max drawdown %` and
+  `Worst day %` unchanged while `Borrow paid ($)` exactly doubles.
+- `verify_engine.py` and `verify_backtest.py` both still pass; app boots headless on
+  both pages (main + leaderboard), HTTP 200, no tracebacks.
+
+**Next:** v2 backlog -- signed leverage (inverse funds), expense ratio as reference data,
+longer history, Sharpe/Sortino.
+
+**Open questions / blockers:**
+- None.
+
+---
+
 ### 2026-07-03 (borrow fee, single-stock pairs, leaderboard)
 **Did:**
 - Filled in the borrow-fee stub (v2 item). `engine.borrow_cost(notional, rate_annual,
