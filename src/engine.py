@@ -32,11 +32,11 @@ def position_pnl(lev_entry, lev_now, und_entry, und_now, short_size, long_size):
     }
 
 
-def borrow_cost(notional, days=1):
-    """Borrow charge on a position's short notional. Stub: returns 0.0 in v1.
+def borrow_cost(notional, rate_annual, days=1):
+    """Borrow charge on a position's short notional over days at rate_annual.
 
-    Applied per open tranche per day by the backtest. Kept as a separate pure
-    function so v2 (a real daily borrow charge) is a fill-in, not a refactor:
-    notional and days are the inputs that charge will need.
+    Simple daily accrual on a 360-day basis (the money-market convention):
+    notional * rate_annual * days / 360. Applied per open tranche per day by
+    the backtest. No default rate -- the caller must pass one explicitly.
     """
-    return 0.0
+    return notional * rate_annual * days / 360

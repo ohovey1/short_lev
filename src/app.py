@@ -21,7 +21,11 @@ import config
 import data
 import backtest
 
-DISCLAIMER = "NOTE: Fees (including borrowing fees) are omitted -- results are optimistic and not a verdict."
+DISCLAIMER = (
+    "NOTE: Borrow cost uses an indicative annual rate (adjustable below, hand-refresh from "
+    "IBKR/iBorrowDesk for accuracy). Expense ratio, spread, and dividends are still omitted "
+    "-- results are optimistic and not a verdict."
+)
 
 
 def price_chart(ohlc, title, candles):
@@ -71,10 +75,11 @@ def price_header(label, ohlc):
 
 
 @st.cache_data
-def run(pair_key, hold_days, base_capital, lookback_days):
+def run(pair_key, hold_days, base_capital, lookback_days, borrow_rate_annual):
     """Cached wrapper so slider nudges don't recompute the loop needlessly."""
     return backtest.run_backtest(
-        pair_key, hold_days, base_capital, lookback_days=lookback_days
+        pair_key, hold_days, base_capital, lookback_days=lookback_days,
+        borrow_rate_annual=borrow_rate_annual,
     )
 
 
@@ -128,6 +133,12 @@ base_capital = st.sidebar.number_input(
     "Base capital ($)", min_value=100, value=10000, step=1000
 )
 
+pair_borrow_rate = config.PAIRS[pair_key]["borrow_rate_annual"]
+borrow_rate_annual = st.sidebar.slider(
+    "Borrow rate (annual %)", min_value=0.0, max_value=30.0,
+    value=pair_borrow_rate * 100, step=0.5,
+) / 100
+
 chart_style = st.sidebar.radio("Price chart", ["Line", "Candlestick"], horizontal=True)
 candles = chart_style == "Candlestick"
 
@@ -136,7 +147,7 @@ st.sidebar.header("Docs")
 st.sidebar.page_link("pages/Trade_Strategy.py", label="Trade Strategy")
 
 # --- Run + render ---
-result = run(pair_key, hold_days, base_capital, lookback)
+result = run(pair_key, hold_days, base_capital, lookback, borrow_rate_annual)
 
 pair = config.PAIRS[pair_key]
 trades = result["trades"]
@@ -147,7 +158,7 @@ st.plotly_chart(
     use_container_width=True,
 )
 
-price_header(f"{pair['leveraged_ticker']} price (leveraged)", result["lev_ohlc"])
+price_header(f"{pair['leveraged_ticker']} price ({pair['leverage']}x leveraged)", result["lev_ohlc"])
 st.plotly_chart(
     price_chart(result["lev_ohlc"], pair["leveraged_ticker"], candles),
     use_container_width=True,
@@ -171,6 +182,8 @@ c4, c5, c6 = st.columns(3)
 c4.metric("Max drawdown", f"${result['max_drawdown']:,.2f}")
 c5.metric("Worst day", f"${result['worst_day']:,.2f}")
 c6.metric("Return %", f"{result['pct_return']:.2%}")
+c7, _, _ = st.columns(3)
+c7.metric("Borrow paid", f"${result['borrow_paid']:,.2f}")
 
 st.subheader("Equity curve ($)")
 # Display offset only: equity = starting capital + cumulative P/L (not P&L math).

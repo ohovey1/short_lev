@@ -20,7 +20,9 @@ backtest's loop:
 
 Both checks call engine.position_pnl directly so a bug in the backtest's loop
 (double-count, off-by-one realize day, wrong realize price) would show up as a
-mismatch rather than agreeing with itself.
+mismatch rather than agreeing with itself. Borrow is zeroed for this comparison
+(the re-derivation below doesn't model it) -- see verify_engine.py-adjacent
+borrow_cost math for that piece.
 """
 
 import os
@@ -95,7 +97,7 @@ def main():
     print(f"Verifying backtest tranche lifecycle: {PAIR_KEY}, hold_days={HOLD_DAYS}, "
           f"base_capital=${BASE_CAPITAL:,.0f}\n")
 
-    result = backtest.run_backtest(PAIR_KEY, HOLD_DAYS, BASE_CAPITAL)
+    result = backtest.run_backtest(PAIR_KEY, HOLD_DAYS, BASE_CAPITAL, borrow_rate_annual=0.0)
     bt_equity = result["equity_curve"]
     bt_open = result["open_tranches"]
 

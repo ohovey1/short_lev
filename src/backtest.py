@@ -23,7 +23,7 @@ import engine
 
 
 def run_backtest(pair_key, hold_days, base_capital, price_field="close",
-                 lookback_days=None):
+                 lookback_days=None, borrow_rate_annual=None):
     """Run the overlapping-tranche backtest for one pair.
 
     pair_key indexes config.PAIRS (the leveraged ETF ticker).
@@ -35,11 +35,17 @@ def run_backtest(pair_key, hold_days, base_capital, price_field="close",
     window (None = full window). Slicing happens before the loop, so the curve
     and metrics are computed on the same window.
 
+    borrow_rate_annual: annual borrow rate charged on the short leg's notional,
+    per open tranche per day (see engine.borrow_cost). None means "use the
+    pair's config value" (config.PAIRS[pair_key]["borrow_rate_annual"]).
+
     Returns a dict with the equity curve (a pandas Series indexed by date), the
     daily P&L series, and metrics (total return, max drawdown, worst day).
     """
     pair = config.PAIRS[pair_key]
     leverage = pair["leverage"]
+    if borrow_rate_annual is None:
+        borrow_rate_annual = pair["borrow_rate_annual"]
 
     lev = data.get_prices(pair["leveraged_ticker"])
     und = data.get_prices(pair["underlying_ticker"])
@@ -63,6 +69,7 @@ def run_backtest(pair_key, hold_days, base_capital, price_field="close",
     realized_short = 0.0
     realized_long = 0.0
     borrow_paid = 0.0
+    notional_days = 0.0
 
     equity = []
     open_counts = []
@@ -113,7 +120,7 @@ def run_backtest(pair_key, hold_days, base_capital, price_field="close",
             )
 
         # 3. Mark every open tranche via the engine; sum their current P&L, split by
-        #    leg. Charge borrow per open tranche per day (0 in v1, kept in equity).
+        #    leg. Charge borrow per open tranche per day at borrow_rate_annual.
         open_pnl = 0.0
         open_short = 0.0
         open_long = 0.0
@@ -124,10 +131,11 @@ def run_backtest(pair_key, hold_days, base_capital, price_field="close",
             open_pnl += r["net"]
             open_short += r["short_pnl"]
             open_long += r["long_pnl"]
-            borrow_paid += engine.borrow_cost(notional)
+            borrow_paid += engine.borrow_cost(notional, borrow_rate_annual)
+            notional_days += notional
 
         # 4. Equity = realized + open marks - borrow paid to date. The per-leg curves
-        #    sum back to this (borrow = 0 in v1).
+        #    sum to equity + borrow_paid (borrow is not split between legs).
         equity.append(realized_pnl + open_pnl - borrow_paid)
         short_pts.append(realized_short + open_short)
         long_pts.append(realized_long + open_long)
@@ -154,6 +162,8 @@ def run_backtest(pair_key, hold_days, base_capital, price_field="close",
         "trades": trades_df,
         "lev_ohlc": lev_ohlc,
         "und_ohlc": und_ohlc,
+        "borrow_paid": borrow_paid,
+        "notional_days": notional_days,  # sum of open short notional per tranche-day
         "starting_capital": base_capital,
         "ending_capital": base_capital + total_return,
         "total_return": total_return,
