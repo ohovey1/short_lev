@@ -40,3 +40,15 @@ def borrow_cost(notional, rate_annual, days=1):
     the backtest. No default rate -- the caller must pass one explicitly.
     """
     return notional * rate_annual * days / 360
+
+
+def breakeven_borrow_rate(gross_pnl, notional_days):
+    """Annual borrow rate at which gross_pnl would be fully consumed by borrow.
+
+    Analytic, not searched: borrow scales linearly in rate (see borrow_cost),
+    so the rate that charges exactly gross_pnl in total is
+    gross_pnl / (notional_days / 360), where notional_days is the sum of open
+    short notional over every tranche-day (the same quantity borrow_cost sums
+    over when charged per open tranche per day).
+    """
+    return gross_pnl / (notional_days / 360)

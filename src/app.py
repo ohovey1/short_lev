@@ -145,6 +145,7 @@ candles = chart_style == "Candlestick"
 # Docs section: link to the strategy explainer (its own page; default nav hidden).
 st.sidebar.header("Docs")
 st.sidebar.page_link("pages/Trade_Strategy.py", label="Trade Strategy")
+st.sidebar.page_link("pages/Pair_Analysis.py", label="Pair Leaderboard")
 
 # --- Run + render ---
 result = run(pair_key, hold_days, base_capital, lookback, borrow_rate_annual)
