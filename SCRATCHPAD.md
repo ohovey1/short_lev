@@ -6,6 +6,46 @@ Each entry: what changed, what's next, open questions/blockers.
 
 ---
 
+### 2026-07-05 (fix deployed 429 crash: seed price data + polygon retry)
+**Did:**
+- Diagnosed the deployed Streamlit Cloud leaderboard crash: cache/ was gitignored, so
+  the deploy had no price CSVs; the leaderboard's 26 cold get_prices calls hit
+  Polygon's free-tier ~5 req/min limit -> HTTP 429 -> raise_for_status crash. Local
+  never saw it because the cache was warmed once, slowly.
+- Fix 1: price CSVs are now COMMITTED seed data. .gitignore narrowed from cache/ to
+  just cache/borrow_rates.csv + cache/borrow_history.csv (transient/locally-accruing).
+  Re-warmed all 24 tickers paced (13s apart) so every committed window ends today.
+  Deleted stale cache/SQQQ.csv (SQQQ left PAIRS in the 10-pair rekey; inverse = v2).
+  Tradeoff: deployed price data is frozen at the last committed fetch -- refresh by
+  deleting cache/*.csv, rerunning the warm loop, committing.
+- Fix 2: _fetch_polygon retries up to 5x on HTTP 429 with a 15s sleep (safety net for
+  any remaining cold fetch). Other HTTP errors still raise immediately.
+- CLAUDE.md commit rules / file map / secrets notes updated for the new cache split.
+
+**Verified:**
+- Warm loop: 24/24 tickers fetched clean (500 rows each, no 429s at 13s pacing).
+- verify_engine.py + verify_backtest.py pass on the fresh data; all 13 pairs run
+  (240-day windows ending 2026-07-02). App boots headless, both pages 200.
+- git status confirmed borrow_rates.csv / borrow_history.csv stay untracked under the
+  narrowed .gitignore; only price CSVs staged.
+
+**Incident (owned + fixed):** the warm loop's `rm -f cache/*.csv` also deleted
+borrow_rates.csv and borrow_history.csv (the accruing history!). Recovered:
+borrow_rates refetches itself; the 2026-07-03 history rows were reconstructed from the
+exact values logged in that session's gate output (this file, entry below), and
+2026-07-05 rows re-logged on refetch. Verified 13 rows per date afterward. Lesson: the
+borrow CSVs live alongside the price CSVs, so never glob-delete cache/*.csv -- delete
+price files by ticker list, or move the borrow files out of cache/ someday.
+
+**Next:**
+- Redeploy on Streamlit Cloud and confirm the leaderboard renders.
+
+**Open questions / blockers:**
+- Committed price data goes stale; fine for the demo, revisit if this becomes a
+  daily-use tool (ROADMAP has the longer-history/paid-tier item).
+
+---
+
 ### 2026-07-05 (remove borrow sliders; live rate on the main page)
 **Did:**
 - Removed both manual borrow-rate controls now that rates are live data: the main

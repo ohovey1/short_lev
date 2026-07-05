@@ -94,8 +94,10 @@ the curve.
 - Longer history (swap data source to a paid/keyed tier with multi-year coverage).
 - Sharpe / Sortino, rolling stats.
 - Parameterize rebalance frequency (daily is hardcoded in v1).
-- Data layer: add rate-limit handling (Polygon free tier ~5 req/min; pre-warming many
-  tickers at once trips HTTP 429). Currently mitigated by fetch-once-then-cache.
+- [x] Data layer: add rate-limit handling (Polygon free tier ~5 req/min; pre-warming many
+  tickers at once trips HTTP 429). DONE 2026-07-05: `_fetch_polygon` retries up to 5x on
+  429 with a 15s wait, and the price CSVs are now committed seed data (deploys no longer
+  cold-fetch 26 tickers -- that was crashing the Streamlit Cloud leaderboard with 429s).
 - [x] Cross-pair leaderboard page added 2026-07-03 (`src/pages/Pair_Analysis.py`): gross
   vs net return, borrow paid, max drawdown, worst day, and an analytic breakeven borrow
   rate (`engine.breakeven_borrow_rate`) for every pair in one sortable table.
