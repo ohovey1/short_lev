@@ -48,7 +48,7 @@ LOOKBACK_PRESETS = [30, 60, 120, 240, 360]
 preset = st.sidebar.radio(
     "Lookback",
     [str(d) for d in LOOKBACK_PRESETS] + ["Max"],
-    index=3,  # default 240 days
+    index=len(LOOKBACK_PRESETS),  # default Max
     horizontal=True,
 )
 lookback_days = None if preset == "Max" else int(preset)
