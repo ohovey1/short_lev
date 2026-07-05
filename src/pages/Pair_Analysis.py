@@ -134,6 +134,7 @@ else:
 
 df = leaderboard(hold_days, base_capital, lookback_days, live)
 df = df.sort_values("Net return %", ascending=False)
+df.insert(0, "Rank", range(1, len(df) + 1))
 
 st.dataframe(
     df,
