@@ -11,6 +11,7 @@ same cache-first pattern but time-limited (12 hours) since rates move daily.
 import datetime
 import io
 import os
+import time
 import urllib.request
 
 import pandas as pd
@@ -148,6 +149,8 @@ def _fetch_polygon(ticker):
 
     Accepts whatever the API returns (the free tier may cap the window).
     Returns a DataFrame indexed by date with open/high/low/close/volume.
+    Retries on HTTP 429: the free tier allows ~5 requests/min, and a cold
+    cache (e.g. a fresh deploy warming many tickers) trips that limit.
     """
     api_key = os.environ["POLYGON_API_KEY"]
     to = datetime.date.today()
@@ -156,15 +159,19 @@ def _fetch_polygon(ticker):
     url = (
         f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{frm}/{to}"
     )
-    resp = requests.get(
-        url,
-        params={
-            "adjusted": "true",
-            "sort": "asc",
-            "limit": 50000,
-            "apiKey": api_key,
-        },
-    )
+    for _attempt in range(5):
+        resp = requests.get(
+            url,
+            params={
+                "adjusted": "true",
+                "sort": "asc",
+                "limit": 50000,
+                "apiKey": api_key,
+            },
+        )
+        if resp.status_code != 429:
+            break
+        time.sleep(15)  # wait out the rate-limit window, then retry
     resp.raise_for_status()
     payload = resp.json()
 
