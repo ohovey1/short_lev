@@ -6,6 +6,35 @@ Each entry: what changed, what's next, open questions/blockers.
 
 ---
 
+### 2026-07-05 (remove borrow sliders; live rate on the main page)
+**Did:**
+- Removed both manual borrow-rate controls now that rates are live data: the main
+  page's "Borrow rate (annual %)" slider and the leaderboard's "Override borrow rate
+  for all pairs" checkbox+slider. Net-rate resolution everywhere is now live IBKR rate
+  for the leveraged ticker where available, else the pair's config fallback -- no
+  manual tier.
+- app.py: same st.cache_data(ttl="1h") borrow_rates() wrapper as the leaderboard;
+  resolved rate feeds run_backtest unchanged (run() still keys its cache on the rate).
+  New metric "Borrow rate (annual)" next to "Borrow paid" showing the rate and its
+  source, e.g. "0.82% (live)" or "1.00% (config fallback)". Disclaimer updated (no
+  longer says "adjustable below").
+- Leaderboard: leaderboard() lost its borrow_rate_annual param and the "override"
+  source value; docstrings/intro updated.
+
+**Verified:**
+- TQQQ resolves 0.8175% (live); borrow_paid $53.36 matches the live-rate run from the
+  2026-07-03 session exactly. Two-day-old cache refetched cleanly (new fetched_at,
+  history file gained day two of rows automatically). Both pages boot headless, 200,
+  no tracebacks. No leftover override/slider references (grep-checked).
+
+**Next:**
+- Let borrow_history.csv accrue for the time-varying-borrow reader (ROADMAP).
+
+**Open questions / blockers:**
+- None.
+
+---
+
 ### 2026-07-03 (live IBKR borrow rates on the leaderboard)
 **Did:**
 - `data.get_borrow_rates()`: IBKR indicative borrow rates, DataFrame indexed by ticker

@@ -22,8 +22,8 @@ import data
 import backtest
 
 DISCLAIMER = (
-    "NOTE: Borrow cost uses an indicative annual rate (adjustable below, hand-refresh from "
-    "IBKR/iBorrowDesk for accuracy). Expense ratio, spread, and dividends are still omitted "
+    "NOTE: Borrow cost uses the live IBKR indicative rate where available, else the "
+    "config fallback rate. Expense ratio, spread, and dividends are still omitted "
     "-- results are optimistic and not a verdict."
 )
 
@@ -92,6 +92,13 @@ def window_length(pair_key):
     return len(lev.index.intersection(und.index))
 
 
+@st.cache_data(ttl="1h")
+def borrow_rates():
+    """Session cache over data.get_borrow_rates so a failed fetch (None) is not
+    retried -- with its FTP timeout -- on every Streamlit rerun."""
+    return data.get_borrow_rates()
+
+
 st.title("Leveraged-ETF decay backtest")
 st.write(
     "Short the leveraged ETF, long the underlying, open one tranche per day and "
@@ -133,11 +140,15 @@ base_capital = st.sidebar.number_input(
     "Base capital ($)", min_value=100, value=10000, step=1000
 )
 
-pair_borrow_rate = config.PAIRS[pair_key]["borrow_rate_annual"]
-borrow_rate_annual = st.sidebar.slider(
-    "Borrow rate (annual %)", min_value=0.0, max_value=30.0,
-    value=pair_borrow_rate * 100, step=0.5,
-) / 100
+# Borrow rate: live IBKR rate for the leveraged ticker where available, else
+# the pair's config fallback. No manual control -- the rate is data now.
+rates = borrow_rates()
+if rates is not None and pair_key in rates.index:
+    borrow_rate_annual = float(rates.loc[pair_key, "fee_rate"])
+    borrow_source = "live"
+else:
+    borrow_rate_annual = config.PAIRS[pair_key]["borrow_rate_annual"]
+    borrow_source = "config fallback"
 
 chart_style = st.sidebar.radio("Price chart", ["Line", "Candlestick"], horizontal=True)
 candles = chart_style == "Candlestick"
@@ -183,8 +194,9 @@ c4, c5, c6 = st.columns(3)
 c4.metric("Max drawdown", f"${result['max_drawdown']:,.2f}")
 c5.metric("Worst day", f"${result['worst_day']:,.2f}")
 c6.metric("Return %", f"{result['pct_return']:.2%}")
-c7, _, _ = st.columns(3)
+c7, c8, _ = st.columns(3)
 c7.metric("Borrow paid", f"${result['borrow_paid']:,.2f}")
+c8.metric("Borrow rate (annual)", f"{borrow_rate_annual:.2%} ({borrow_source})")
 
 st.subheader("Equity curve ($)")
 # Display offset only: equity = starting capital + cumulative P/L (not P&L math).
