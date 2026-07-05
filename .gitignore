@@ -9,7 +9,12 @@ wheels/
 # Virtual environments
 .venv
 .env
-cache/
+
+# Transient borrow-rate data (refetched live; history accrues locally).
+# Price CSVs under cache/ ARE committed: they are the seed data the deployed
+# app reads, since Polygon's free-tier rate limit makes cold fetches fail.
+cache/borrow_rates.csv
+cache/borrow_history.csv
 __pycache__/
 .venv/
 *.pyc
