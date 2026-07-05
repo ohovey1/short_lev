@@ -45,11 +45,15 @@ held constant: each tranche gets `base_capital / hold_days`.
   - *Return %* -- that return as a fraction of starting capital.
   - *Max drawdown* -- the worst peak-to-trough dip in the equity curve.
   - *Worst day* -- the single largest one-day loss.
+  - *Borrow paid* -- total borrow cost charged on the short leg over the window.
+  - *Borrow rate (annual)* -- the rate used for that charge: IBKR's live
+    indicative rate for the shorted fund when available, else a config fallback.
 - **Trades table / Trade P/L:** each closed tranche, with both legs' P/L and the
   net. Most trades are small wins; the green/red bars show the spread.
 
 ## Important caveat
-**Fees are not included** -- no borrow cost on the short leg, no expense ratios, no
-spreads or dividends. Borrowing a leveraged ETF to short is real and can be
-expensive, so these results are **optimistic**. Treat this as a study of the decay
+**Borrow cost is included; other fees are not.** The short leg is charged daily
+borrow at IBKR's live indicative rate (or a config fallback when the fetch fails)
+-- indicative, not a firm quote. Expense ratios, spreads, and dividends are still
+omitted, so these results remain **optimistic**. Treat this as a study of the decay
 effect, not a verdict on whether the strategy is profitable after costs.
