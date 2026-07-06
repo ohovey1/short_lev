@@ -133,7 +133,7 @@ preset = st.sidebar.radio(
 )
 lookback = n_days if preset == "Max" else min(int(preset), n_days)
 
-strategy = st.sidebar.radio("Strategy", ["Ladder", "Band"], horizontal=True)
+strategy = st.sidebar.radio("Strategy", ["Band", "Ladder"], horizontal=True)
 
 if strategy == "Ladder":
     # Cap hold_days so the ladder fits inside the chosen window.
