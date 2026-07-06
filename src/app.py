@@ -20,6 +20,7 @@ import streamlit as st
 import config
 import data
 import backtest
+import band
 
 DISCLAIMER = (
     "NOTE: Borrow cost uses the live IBKR indicative rate where available, else the "
@@ -84,6 +85,16 @@ def run(pair_key, hold_days, base_capital, lookback_days, borrow_rate_annual):
 
 
 @st.cache_data
+def run_band(pair_key, base_capital, delta_band, short_band, lookback_days,
+             borrow_rate_annual):
+    """Cached wrapper for the band strategy, mirroring run()."""
+    return band.run_band_backtest(
+        pair_key, base_capital, delta_band=delta_band, short_band=short_band,
+        lookback_days=lookback_days, borrow_rate_annual=borrow_rate_annual,
+    )
+
+
+@st.cache_data
 def window_length(pair_key):
     """Number of aligned trading days available for a pair (for slider bounds)."""
     pair = config.PAIRS[pair_key]
@@ -100,12 +111,6 @@ def borrow_rates():
 
 
 st.title("Leveraged-ETF decay backtest")
-st.write(
-    "Short the leveraged ETF, long the underlying, open one tranche per day and "
-    "hold each for a set number of days. The ladder of overlapping holds harvests "
-    "the leveraged fund's daily-reset decay."
-)
-st.warning(DISCLAIMER)
 
 # --- Sidebar controls ---
 st.sidebar.header("Settings")
@@ -128,13 +133,25 @@ preset = st.sidebar.radio(
 )
 lookback = n_days if preset == "Max" else min(int(preset), n_days)
 
-# Cap hold_days so the ladder fits inside the chosen window.
-hold_days = st.sidebar.slider(
-    "Hold days",
-    min_value=1,
-    max_value=max(2, lookback // 2),
-    value=min(5, max(2, lookback // 2)),
-)
+strategy = st.sidebar.radio("Strategy", ["Ladder", "Band"], horizontal=True)
+
+if strategy == "Ladder":
+    # Cap hold_days so the ladder fits inside the chosen window.
+    hold_days = st.sidebar.slider(
+        "Hold days",
+        min_value=1,
+        max_value=max(2, lookback // 2),
+        value=min(5, max(2, lookback // 2)),
+    )
+else:
+    delta_band = st.sidebar.slider(
+        "Delta band", min_value=0.05, max_value=0.30, value=0.10, step=0.01,
+        help="Re-neutralize via the long leg when |net delta| exceeds this fraction of target.",
+    )
+    short_band = st.sidebar.slider(
+        "Short band", min_value=0.05, max_value=0.30, value=0.10, step=0.01,
+        help="Reset the short to target when its notional drifts this fraction from target.",
+    )
 
 base_capital = st.sidebar.number_input(
     "Base capital ($)", min_value=100, value=10000, step=1000
@@ -159,10 +176,24 @@ st.sidebar.page_link("pages/Trade_Strategy.py", label="Trade Strategy")
 st.sidebar.page_link("pages/Pair_Analysis.py", label="Pair Leaderboard")
 
 # --- Run + render ---
-result = run(pair_key, hold_days, base_capital, lookback, borrow_rate_annual)
+if strategy == "Ladder":
+    st.write(
+        "Short the leveraged ETF, long the underlying, open one tranche per day and "
+        "hold each for a set number of days. The ladder of overlapping holds harvests "
+        "the leveraged fund's daily-reset decay."
+    )
+    result = run(pair_key, hold_days, base_capital, lookback, borrow_rate_annual)
+else:
+    st.write(
+        "Short the leveraged ETF, long the underlying, as one continuous position. "
+        "Between trades the hedge is frozen; a trade fires only when the net delta "
+        "or the short notional drifts past its band."
+    )
+    result = run_band(pair_key, base_capital, delta_band, short_band, lookback,
+                      borrow_rate_annual)
+st.warning(DISCLAIMER)
 
 pair = config.PAIRS[pair_key]
-trades = result["trades"]
 
 price_header(f"{pair['underlying_ticker']} price (underlying)", result["und_ohlc"])
 st.plotly_chart(
@@ -176,61 +207,86 @@ st.plotly_chart(
     use_container_width=True,
 )
 
-st.subheader("Long vs short P/L ($)")
-st.caption(
-    "Each leg's cumulative P/L. The legs are hedged -- short trends down, long up -- and "
-    "the gap between them is the decay edge that becomes total return."
-)
-st.line_chart(
-    pd.DataFrame({"Long P/L": result["long_curve"], "Short P/L": result["short_curve"]})
-)
+if strategy == "Ladder":
+    st.subheader("Long vs short P/L ($)")
+    st.caption(
+        "Each leg's cumulative P/L. The legs are hedged -- short trends down, long up -- and "
+        "the gap between them is the decay edge that becomes total return."
+    )
+    st.line_chart(
+        pd.DataFrame({"Long P/L": result["long_curve"], "Short P/L": result["short_curve"]})
+    )
 
 st.subheader("Metrics")
-c1, c2, c3 = st.columns(3)
-c1.metric("Starting capital", f"${result['starting_capital']:,.2f}")
-c2.metric("Ending capital", f"${result['ending_capital']:,.2f}")
-c3.metric("Total return", f"${result['total_return']:,.2f}")
-c4, c5, c6 = st.columns(3)
-c4.metric("Max drawdown", f"${result['max_drawdown']:,.2f}")
-c5.metric("Worst day", f"${result['worst_day']:,.2f}")
-c6.metric("Return %", f"{result['pct_return']:.2%}")
-c7, c8, _ = st.columns(3)
-c7.metric("Borrow paid", f"${result['borrow_paid']:,.2f}")
-c8.metric("Borrow rate (annual)", f"{borrow_rate_annual:.2%} ({borrow_source})")
+if strategy == "Ladder":
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Starting capital", f"${result['starting_capital']:,.2f}")
+    c2.metric("Ending capital", f"${result['ending_capital']:,.2f}")
+    c3.metric("Total return", f"${result['total_return']:,.2f}")
+    c4, c5, c6 = st.columns(3)
+    c4.metric("Max drawdown", f"${result['max_drawdown']:,.2f}")
+    c5.metric("Worst day", f"${result['worst_day']:,.2f}")
+    c6.metric("Return %", f"{result['pct_return']:.2%}")
+    c7, c8, _ = st.columns(3)
+    c7.metric("Borrow paid", f"${result['borrow_paid']:,.2f}")
+    c8.metric("Borrow rate (annual)", f"{borrow_rate_annual:.2%} ({borrow_source})")
+else:
+    # Display offset only: capital totals = base capital + cumulative P/L.
+    total_return = result["equity_curve"].iloc[-1]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Starting capital", f"${base_capital:,.2f}")
+    c2.metric("Ending capital", f"${base_capital + total_return:,.2f}")
+    c3.metric("Total return", f"${total_return:,.2f}")
+    c4, c5, c6 = st.columns(3)
+    c4.metric("Max drawdown", f"${result['max_drawdown']:,.2f}")
+    c5.metric("Worst day", f"${result['worst_day']:,.2f}")
+    c6.metric("Return %", f"{result['pct_return']:.2%}")
+    c7, c8, c9 = st.columns(3)
+    c7.metric("Borrow paid", f"${result['borrow_paid']:,.2f}")
+    c8.metric("Borrow rate (annual)", f"{borrow_rate_annual:.2%} ({borrow_source})")
+    c9.metric("Breakeven borrow", f"{result['breakeven_borrow']:.2%}")
+    c10, c11, _ = st.columns(3)
+    c10.metric("Trades", f"{result['n_trades']}")
+    c11.metric(
+        "Total turnover",
+        f"${result['turnover_lev'] + result['turnover_und']:,.2f}",
+    )
 
 st.subheader("Equity curve ($)")
 # Display offset only: equity = starting capital + cumulative P/L (not P&L math).
 st.plotly_chart(
-    equity_chart(result["equity_curve"] + result["starting_capital"]),
+    equity_chart(result["equity_curve"] + base_capital),
     use_container_width=True,
 )
 
-st.subheader("Trades")
-st.caption("Each row is one tranche held to its full hold_days, closed at that day's prices.")
-st.dataframe(
-    trades,
-    hide_index=True,
-    column_config={
-        "open_date": st.column_config.DateColumn("Open"),
-        "close_date": st.column_config.DateColumn("Close"),
-        "lev_entry": st.column_config.NumberColumn("Lev in", format="%.2f"),
-        "lev_exit": st.column_config.NumberColumn("Lev out", format="%.2f"),
-        "und_entry": st.column_config.NumberColumn("Und in", format="%.2f"),
-        "und_exit": st.column_config.NumberColumn("Und out", format="%.2f"),
-        "short_pnl": st.column_config.NumberColumn("Short P/L", format="$%.2f"),
-        "long_pnl": st.column_config.NumberColumn("Long P/L", format="$%.2f"),
-        "total_pnl": st.column_config.NumberColumn("Total P/L", format="$%.2f"),
-    },
-)
-
-st.subheader("Trade P/L")
-if not trades.empty:
-    colors = ["green" if v >= 0 else "red" for v in trades["total_pnl"]]
-    bar = go.Figure(go.Bar(
-        x=trades["close_date"], y=trades["total_pnl"], marker_color=colors,
-    ))
-    bar.update_layout(
-        height=300, margin=dict(l=0, r=0, t=10, b=0),
-        yaxis_title="Total P/L ($)", xaxis_title="Close date",
+if strategy == "Ladder":
+    trades = result["trades"]
+    st.subheader("Trades")
+    st.caption("Each row is one tranche held to its full hold_days, closed at that day's prices.")
+    st.dataframe(
+        trades,
+        hide_index=True,
+        column_config={
+            "open_date": st.column_config.DateColumn("Open"),
+            "close_date": st.column_config.DateColumn("Close"),
+            "lev_entry": st.column_config.NumberColumn("Lev in", format="%.2f"),
+            "lev_exit": st.column_config.NumberColumn("Lev out", format="%.2f"),
+            "und_entry": st.column_config.NumberColumn("Und in", format="%.2f"),
+            "und_exit": st.column_config.NumberColumn("Und out", format="%.2f"),
+            "short_pnl": st.column_config.NumberColumn("Short P/L", format="$%.2f"),
+            "long_pnl": st.column_config.NumberColumn("Long P/L", format="$%.2f"),
+            "total_pnl": st.column_config.NumberColumn("Total P/L", format="$%.2f"),
+        },
     )
-    st.plotly_chart(bar, use_container_width=True)
+
+    st.subheader("Trade P/L")
+    if not trades.empty:
+        colors = ["green" if v >= 0 else "red" for v in trades["total_pnl"]]
+        bar = go.Figure(go.Bar(
+            x=trades["close_date"], y=trades["total_pnl"], marker_color=colors,
+        ))
+        bar.update_layout(
+            height=300, margin=dict(l=0, r=0, t=10, b=0),
+            yaxis_title="Total P/L ($)", xaxis_title="Close date",
+        )
+        st.plotly_chart(bar, use_container_width=True)
