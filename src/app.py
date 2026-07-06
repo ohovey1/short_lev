@@ -61,6 +61,19 @@ def equity_chart(equity_dollars):
     return fig
 
 
+def trade_pnl_bar(trades):
+    """Green/red bar chart of per-trade total P/L by close date."""
+    colors = ["green" if v >= 0 else "red" for v in trades["total_pnl"]]
+    bar = go.Figure(go.Bar(
+        x=trades["close_date"], y=trades["total_pnl"], marker_color=colors,
+    ))
+    bar.update_layout(
+        height=300, margin=dict(l=0, r=0, t=10, b=0),
+        yaxis_title="Total P/L ($)", xaxis_title="Close date",
+    )
+    return bar
+
+
 def price_header(label, ohlc):
     """Header row: chart label on the left, the asset's window return (close-to-
     close) on the right, green for positive and red for negative."""
@@ -259,9 +272,9 @@ st.plotly_chart(
     use_container_width=True,
 )
 
+trades = result["trades"]
+st.subheader("Trades")
 if strategy == "Ladder":
-    trades = result["trades"]
-    st.subheader("Trades")
     st.caption("Each row is one tranche held to its full hold_days, closed at that day's prices.")
     st.dataframe(
         trades,
@@ -278,15 +291,32 @@ if strategy == "Ladder":
             "total_pnl": st.column_config.NumberColumn("Total P/L", format="$%.2f"),
         },
     )
+else:
+    st.caption(
+        "Each row is one band-triggered rebalance: it closes the segment opened at "
+        "the prior trade (P/L is that segment's, via the engine) and shows which "
+        "band fired and the dollars traded to re-neutralize. The final still-open "
+        "segment is not listed."
+    )
+    st.dataframe(
+        trades,
+        hide_index=True,
+        column_config={
+            "open_date": st.column_config.DateColumn("Open"),
+            "close_date": st.column_config.DateColumn("Close"),
+            "trigger": st.column_config.TextColumn("Trigger"),
+            "lev_entry": st.column_config.NumberColumn("Lev in", format="%.2f"),
+            "lev_exit": st.column_config.NumberColumn("Lev out", format="%.2f"),
+            "und_entry": st.column_config.NumberColumn("Und in", format="%.2f"),
+            "und_exit": st.column_config.NumberColumn("Und out", format="%.2f"),
+            "short_pnl": st.column_config.NumberColumn("Short P/L", format="$%.2f"),
+            "long_pnl": st.column_config.NumberColumn("Long P/L", format="$%.2f"),
+            "total_pnl": st.column_config.NumberColumn("Total P/L", format="$%.2f"),
+            "traded_lev": st.column_config.NumberColumn("Traded lev", format="$%.2f"),
+            "traded_und": st.column_config.NumberColumn("Traded und", format="$%.2f"),
+        },
+    )
 
-    st.subheader("Trade P/L")
-    if not trades.empty:
-        colors = ["green" if v >= 0 else "red" for v in trades["total_pnl"]]
-        bar = go.Figure(go.Bar(
-            x=trades["close_date"], y=trades["total_pnl"], marker_color=colors,
-        ))
-        bar.update_layout(
-            height=300, margin=dict(l=0, r=0, t=10, b=0),
-            yaxis_title="Total P/L ($)", xaxis_title="Close date",
-        )
-        st.plotly_chart(bar, use_container_width=True)
+st.subheader("Trade P/L")
+if not trades.empty:
+    st.plotly_chart(trade_pnl_bar(trades), use_container_width=True)
