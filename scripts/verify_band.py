@@ -1,0 +1,168 @@
+"""Verify the band-rebalanced backtest (src/band.py).
+
+Run from the project root:
+    .venv/Scripts/python.exe scripts/verify_band.py
+
+Three checks:
+  a. Hand-computed two-segment run on 4 fabricated days that trip the delta
+     band exactly once (short band disabled by making it huge).
+  b. Degenerate run on real cached data with both bands huge: zero trades, so
+     the equity must equal one engine.position_pnl interval (first -> last
+     close) minus independently re-derived accrued borrow.
+  c. Sanity: band vs ladder (hold_days=5) on TQQQ over the full cached window
+     at the same config borrow rate -- both positive, within a factor of 2.
+
+Check (a) monkeypatches data.get_prices so run_band_backtest sees fabricated
+prices without band.py needing a price-injection parameter.
+"""
+
+import os
+import sys
+
+# Make the src/ modules importable when run from the project root.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+import pandas as pd
+
+import backtest
+import band
+import config
+import data
+import engine
+
+PAIR_KEY = "TQQQ"  # L=3; check (a) fabricates its prices, (b)/(c) use the cache
+
+
+def check(label, ok, detail):
+    print(f"  {detail}")
+    print(f"  => {'PASS' if ok else 'FAIL'}\n")
+    return ok
+
+
+def fake_ohlc(closes):
+    """Date-indexed OHLC frame where every field equals the given closes."""
+    dates = pd.date_range("2026-01-05", periods=len(closes), freq="B")
+    return pd.DataFrame(
+        {f: closes for f in ["open", "high", "low", "close"]}, index=dates
+    )
+
+
+def check_a():
+    """Two-segment hand check: one delta-band trip on fabricated prices.
+
+    L=3, target=1000, delta_band=0.10, short_band=10.0 (never trips), borrow 0.
+      d0 (100, 100): entry, no trip, equity 0.
+      d1 (100, 105): long notional 3150, net_delta +150 > 100 -> delta trip.
+          Realized = 3000 * 5% = 150; long reset to 3000 at (100, 105).
+      d2 (102, 106): net_delta ~ -31.4, no trip.
+      d3 (101, 104): net_delta ~ -58.6, no trip.
+          Final equity = 150 + (-1000*0.01 + 3000*(104/105 - 1))
+                       = 150 - 10 - 200/7 = 111.428571...
+    """
+    print("--- a. Hand-computed two-segment check (fabricated 4-day window) ---")
+    pair = config.PAIRS[PAIR_KEY]
+    fake = {
+        pair["leveraged_ticker"]: fake_ohlc([100.0, 100.0, 102.0, 101.0]),
+        pair["underlying_ticker"]: fake_ohlc([100.0, 105.0, 106.0, 104.0]),
+    }
+
+    real_get_prices = data.get_prices
+    data.get_prices = lambda ticker: fake[ticker]
+    try:
+        r = band.run_band_backtest(
+            PAIR_KEY, base_capital=1000, delta_band=0.10, short_band=10.0,
+            borrow_rate_annual=0.0,
+        )
+    finally:
+        data.get_prices = real_get_prices
+
+    expected = 150.0 - 10.0 - 200.0 / 7.0
+    got = r["equity_curve"].iloc[-1]
+    ok = (
+        abs(got - expected) < 1e-6
+        and r["n_trades"] == 1
+        and abs(r["turnover_und"] - 150.0) < 1e-9
+        and r["turnover_lev"] == 0.0
+    )
+    return check(
+        "a", ok,
+        f"final equity {got:.6f} (expected {expected:.6f}), "
+        f"n_trades {r['n_trades']} (expected 1), "
+        f"turnover und {r['turnover_und']:.2f} / lev {r['turnover_lev']:.2f} "
+        f"(expected 150.00 / 0.00)",
+    )
+
+
+def check_b():
+    """Degenerate: both bands huge on real cached data -> zero trades, and
+    equity = one position_pnl interval (first -> last) minus accrued borrow,
+    with borrow re-derived independently from the same aligned closes."""
+    print("--- b. Degenerate zero-trade check (real cached data, bands=10.0) ---")
+    pair = config.PAIRS[PAIR_KEY]
+    rate = pair["borrow_rate_annual"]
+    base = 10000.0
+
+    r = band.run_band_backtest(
+        PAIR_KEY, base_capital=base, delta_band=10.0, short_band=10.0,
+        borrow_rate_annual=rate,
+    )
+
+    # Independent re-derivation, mirroring band.py's alignment.
+    lev = data.get_prices(pair["leveraged_ticker"])
+    und = data.get_prices(pair["underlying_ticker"])
+    dates = lev.index.intersection(und.index).sort_values()
+    lev_p = lev.loc[dates, "close"]
+    und_p = und.loc[dates, "close"]
+
+    interval = engine.position_pnl(
+        lev_p.iloc[0], lev_p.iloc[-1], und_p.iloc[0], und_p.iloc[-1],
+        base, pair["leverage"] * base,
+    )
+    borrow = sum(
+        engine.borrow_cost(base * (lev_p.loc[d] / lev_p.iloc[0]), rate)
+        for d in dates
+    )
+    expected = interval["net"] - borrow
+    got = r["equity_curve"].iloc[-1]
+    ok = r["n_trades"] == 0 and abs(got - expected) < 1e-6
+    return check(
+        "b", ok,
+        f"n_trades {r['n_trades']} (expected 0); final equity {got:.6f} vs "
+        f"single-interval net {interval['net']:.6f} - borrow {borrow:.6f} "
+        f"= {expected:.6f}",
+    )
+
+
+def check_c():
+    """Sanity: band (defaults) vs ladder (hold_days=5), full window, same
+    config borrow rate -> both positive, pct_return within a factor of 2."""
+    print("--- c. Band vs ladder sanity (TQQQ, full window, config borrow) ---")
+    rate = config.PAIRS[PAIR_KEY]["borrow_rate_annual"]
+    base = 10000.0
+
+    b = band.run_band_backtest(PAIR_KEY, base_capital=base, borrow_rate_annual=rate)
+    l = backtest.run_backtest(PAIR_KEY, hold_days=5, base_capital=base,
+                              borrow_rate_annual=rate)
+
+    ratio = b["pct_return"] / l["pct_return"] if l["pct_return"] != 0 else float("inf")
+    ok = b["pct_return"] > 0 and l["pct_return"] > 0 and 0.5 <= ratio <= 2.0
+    return check(
+        "c", ok,
+        f"band pct_return {b['pct_return']:.4%} ({b['n_trades']} trades), "
+        f"ladder pct_return {l['pct_return']:.4%}, ratio {ratio:.2f} "
+        f"(need both > 0 and ratio in [0.5, 2])",
+    )
+
+
+def main():
+    results = [check_a(), check_b(), check_c()]
+    print("=" * 60)
+    if all(results):
+        print("All band checks PASSED.")
+    else:
+        print("Some checks FAILED -- see above.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
