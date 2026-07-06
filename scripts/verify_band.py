@@ -78,18 +78,29 @@ def check_a():
 
     expected = 150.0 - 10.0 - 200.0 / 7.0
     got = r["equity_curve"].iloc[-1]
+    t = r["trades"]
+    trades_ok = (
+        len(t) == 1
+        and t.iloc[0]["trigger"] == "delta band"
+        and abs(t.iloc[0]["total_pnl"] - 150.0) < 1e-6
+        and abs(t.iloc[0]["traded_und"] - 150.0) < 1e-6
+        and t.iloc[0]["traded_lev"] == 0.0
+    )
     ok = (
         abs(got - expected) < 1e-6
         and r["n_trades"] == 1
         and abs(r["turnover_und"] - 150.0) < 1e-9
         and r["turnover_lev"] == 0.0
+        and trades_ok
     )
     return check(
         "a", ok,
         f"final equity {got:.6f} (expected {expected:.6f}), "
         f"n_trades {r['n_trades']} (expected 1), "
         f"turnover und {r['turnover_und']:.2f} / lev {r['turnover_lev']:.2f} "
-        f"(expected 150.00 / 0.00)",
+        f"(expected 150.00 / 0.00); trades log: {len(t)} row(s), "
+        f"trigger '{t.iloc[0]['trigger']}', P/L {t.iloc[0]['total_pnl']:.2f} "
+        f"(expected 1 x 'delta band' x 150.00)",
     )
 
 
@@ -124,10 +135,11 @@ def check_b():
     )
     expected = interval["net"] - borrow
     got = r["equity_curve"].iloc[-1]
-    ok = r["n_trades"] == 0 and abs(got - expected) < 1e-6
+    ok = r["n_trades"] == 0 and r["trades"].empty and abs(got - expected) < 1e-6
     return check(
         "b", ok,
-        f"n_trades {r['n_trades']} (expected 0); final equity {got:.6f} vs "
+        f"n_trades {r['n_trades']} (expected 0, trades log empty: "
+        f"{r['trades'].empty}); final equity {got:.6f} vs "
         f"single-interval net {interval['net']:.6f} - borrow {borrow:.6f} "
         f"= {expected:.6f}",
     )

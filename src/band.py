@@ -58,6 +58,8 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
     turnover_und = 0.0   # gross $ traded on the underlying leg
     n_trades = 0
 
+    seg_date = dates[0]  # entry date of the current segment
+    trades = []          # one row per band-triggered rebalance (closed segment)
     equity = []
 
     for date in dates:
@@ -72,20 +74,41 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
         if abs(short_notional - target) > short_band * target:
             r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
             realized += r["net"]
-            turnover_lev += abs(target - short_notional)
-            turnover_und += abs(L * target - long_notional)
+            traded_lev = abs(target - short_notional)
+            traded_und = abs(L * target - long_notional)
+            turnover_lev += traded_lev
+            turnover_und += traded_und
+            trades.append({
+                "open_date": seg_date, "close_date": date, "trigger": "short band",
+                "lev_entry": lev_e, "lev_exit": lev_now,
+                "und_entry": und_e, "und_exit": und_now,
+                "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
+                "total_pnl": r["net"],
+                "traded_lev": traded_lev, "traded_und": traded_und,
+            })
             lev_e, und_e = lev_now, und_now
             short_size, long_size = target, L * target
             short_notional, long_notional = target, L * target
+            seg_date = date
             n_trades += 1
         elif abs(net_delta) > delta_band * target:
             r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
             realized += r["net"]
-            turnover_und += abs(net_delta)          # long leg only
+            traded_und = abs(net_delta)             # long leg only
+            turnover_und += traded_und
+            trades.append({
+                "open_date": seg_date, "close_date": date, "trigger": "delta band",
+                "lev_entry": lev_e, "lev_exit": lev_now,
+                "und_entry": und_e, "und_exit": und_now,
+                "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
+                "total_pnl": r["net"],
+                "traded_lev": 0.0, "traded_und": traded_und,
+            })
             lev_e, und_e = lev_now, und_now
             short_size = short_notional             # carry the short at its current value
             long_size = L * short_notional
             long_notional = long_size
+            seg_date = date
             n_trades += 1
 
         borrow_paid += engine.borrow_cost(short_notional, borrow_rate_annual)
@@ -110,6 +133,7 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
         "max_drawdown": (equity_curve - equity_curve.cummax()).min(),
         "worst_day": daily_pnl.min(),
         "n_trades": n_trades,
+        "trades": pd.DataFrame(trades),  # final still-open segment not included
         "turnover_lev": turnover_lev,
         "turnover_und": turnover_und,
         "breakeven_borrow": engine.breakeven_borrow_rate(total_return + borrow_paid, notional_days),
