@@ -41,13 +41,25 @@ Each entry: what changed, what's next, open questions/blockers.
   sliders and Trades / Total turnover metrics present. Headless boot: all three pages
   HTTP 200, no tracebacks.
 
+**Follow-up (same day, committed separately):** band is now the DEFAULT strategy on
+the main page (radio order Band/Ladder). Pair_Analysis got the same strategy radio:
+band default, delta/short band sliders replace hold_days when selected; leaderboard()
+reparameterized (strategy + both strategies' params in the cache key), band rows use
+gross["breakeven_borrow"] (same formula as the ladder's engine call at zero borrow)
+and add a Trades column. docs/strategy.md restructured: "two ways to trade it" intro,
+band section (default) + ladder section (reference), band metrics explained,
+ladder-only charts labeled. Verified via AppTest: main page defaults Band; leaderboard
+renders 13 rows both strategies, Trades column band-only, lookback survives the
+switch. NOTE: AppTest cannot run a pages/ file standalone (st.page_link needs the
+multipage runtime; from_string temp dir breaks the relative sys.path insert) -- test
+stubs the link + pins src/ absolutely; real multipage covered by headless boot (all
+three pages 200, no tracebacks).
+
 **Next:**
-- User verification of the diff, then commit (nothing staged yet, per workflow).
-- Maybe: band strategy on the leaderboard page; per-trade log for the band view.
+- Maybe: per-trade log for the band view; band params on the leaderboard rows.
 
 **Open questions / blockers:**
-- band_prototype.py stays untracked in the repo root (its docstring says "not
-  committed") -- flag if it should be gitignored explicitly or deleted.
+- band_prototype.py: user confirmed they deleted it after adaptation (2026-07-05).
 
 ---
 

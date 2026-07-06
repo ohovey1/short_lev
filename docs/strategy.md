@@ -16,12 +16,38 @@ Shorting a +3x fund gives -3x exposure to QQQ; the long QQQ leg adds +3x back. T
 two cancel, so the position is roughly **delta-neutral** -- it doesn't make or lose
 much from QQQ simply going up or down. What's left over is the decay.
 
-**When trades open and close (this demo):** a new tranche opens every trading day at
+The backtest page offers **two ways to trade this position**, selectable in the
+sidebar. **Band rebalancing** (the default) holds one continuous position and only
+trades when it drifts past a threshold -- this is how a live bot would trade.
+The **tranche ladder** opens and closes positions on a fixed calendar -- it is the
+reference implementation the band strategy is checked against.
+
+## Band rebalancing (default)
+
+Hold **one continuous position**: short about `base capital` of the leveraged ETF,
+long `leverage` times that of the underlying. Between trades nothing is touched --
+the hedge is frozen and the position simply marks to market. A trade fires only
+when the position drifts past a band:
+
+- **Short band:** if the short leg's notional drifts more than `short_band` (e.g.
+  10%) of target away from target, reset the short back to target and re-neutralize
+  both legs.
+- **Delta band:** otherwise, if the net delta (long notional minus leverage times
+  short notional) exceeds `delta_band` of target, re-neutralize using the **long
+  leg only** -- the short keeps running at its current value.
+
+No fixed schedule, few trades, each one only when the hedge has genuinely drifted.
+Borrow accrues daily on whatever the short notional currently is. The band widths
+are the two sidebar sliders: wider bands mean fewer trades (less turnover) but a
+sloppier hedge.
+
+## The tranche ladder (reference)
+
+**When trades open and close:** a new tranche opens every trading day at
 that day's closing prices, and closes `hold_days` days later at that day's close --
 fixed timing, not signal-driven. The point is to study the decay over a steady
 schedule, so there are no entry/exit rules beyond the calendar.
 
-## Multi-day holds
 Instead of resetting every day, we **open one tranche per day and hold it for a set
 number of days** (`hold_days`). On a normal day, `hold_days` tranches are open at
 once, at staggered ages. This ladder of overlapping holds is what actually captures
@@ -35,9 +61,9 @@ held constant: each tranche gets `base_capital / hold_days`.
 - **Price charts (QQQ, TQQQ):** the raw price action over your selected window.
   Toggle line/candlestick in the sidebar. TQQQ should move the same direction as
   QQQ but about 3x as much -- that extra volatility is the source of the decay.
-- **Long vs short P/L:** each leg's running P/L. They move in opposite directions
-  (the hedge working). The **gap between them is the edge** -- that gap is what
-  becomes total return.
+- **Long vs short P/L** (ladder only): each leg's running P/L. They move in
+  opposite directions (the hedge working). The **gap between them is the edge** --
+  that gap is what becomes total return.
 - **Equity curve:** starting capital plus cumulative P/L over time. A gentle,
   mostly-upward line is the decay being collected day by day.
 - **Metrics:**
@@ -48,8 +74,13 @@ held constant: each tranche gets `base_capital / hold_days`.
   - *Borrow paid* -- total borrow cost charged on the short leg over the window.
   - *Borrow rate (annual)* -- the rate used for that charge: IBKR's live
     indicative rate for the shorted fund when available, else a config fallback.
-- **Trades table / Trade P/L:** each closed tranche, with both legs' P/L and the
-  net. Most trades are small wins; the green/red bars show the spread.
+  - *Trades / Total turnover* (band) -- how many band-triggered rebalances fired,
+    and the gross dollars traded across both legs doing so. Fewer trades and less
+    turnover mean lower real-world costs (spreads, commissions) for the same edge.
+  - *Breakeven borrow* (band) -- the annualized borrow rate at which the gross
+    edge would be fully consumed by borrow cost.
+- **Trades table / Trade P/L** (ladder only): each closed tranche, with both legs'
+  P/L and the net. Most trades are small wins; the green/red bars show the spread.
 
 ## Important caveat
 **Borrow cost is included; other fees are not.** The short leg is charged daily
