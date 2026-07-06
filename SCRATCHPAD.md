@@ -6,6 +6,51 @@ Each entry: what changed, what's next, open questions/blockers.
 
 ---
 
+### 2026-07-05 (band-rebalanced backtest as sibling strategy)
+**Did:**
+- New `src/band.py`: `run_band_backtest(pair_key, base_capital, delta_band=0.10,
+  short_band=0.10, price_field, lookback_days, borrow_rate_annual)` -- adapted from the
+  user-provided `band_prototype.py` (repo root, untracked; policy kept verbatim). One
+  continuous position, hedge frozen between trades (engine.position_pnl marks each
+  segment); short-band trip resets short to target and re-neutralizes both legs,
+  else delta-band trip re-neutralizes via the LONG leg only (short carries at current
+  value). Borrow accrues daily on current (post-trade) short notional. Adaptations vs
+  prototype: max_drawdown/worst_day in dollars (run_backtest convention, prototype
+  normalized by capital), notional_days added to the return dict, gross_return dropped,
+  lev_ohlc/und_ohlc added so the UI price charts work for both strategies.
+- `src/app.py`: sidebar "Strategy" radio (Ladder / Band) after the pair + lookback
+  widgets (unconditional widgets keep their state across the switch). Ladder shows the
+  hold_days slider; band shows Delta band / Short band sliders (0.05-0.30). Shared:
+  pair, lookback, capital, borrow-rate resolution, price charts, equity chart. Band
+  metrics add Breakeven borrow, Trades, Total turnover (turnover_lev + turnover_und,
+  display aggregation). Intro blurb is strategy-aware; ladder view unchanged.
+- New `scripts/verify_band.py` (mirrors verify_engine.py style): (a) hand-computed
+  two-segment check on 4 fabricated days (monkeypatches data.get_prices; one delta trip;
+  final equity 150 - 10 - 200/7 = 111.428571 exact), (b) degenerate bands=10.0 on real
+  TQQQ -> 0 trades and equity == single position_pnl interval minus independently
+  re-derived borrow, (c) band vs ladder(hold_days=5) on TQQQ full window, same config
+  rate -> both positive, ratio within [0.5, 2].
+
+**Verified:**
+- verify_band.py exit 0: (a) exact match; (b) 4961.042928 both sides; (c) band 22.53%
+  (125 trades) vs ladder 23.26%, ratio 0.97. verify_engine.py + verify_backtest.py
+  still pass (engine/data/config untouched -- confirmed via git diff, only app.py
+  modified plus two new files).
+- Item-2 gate via streamlit AppTest: TSLL @ 240 lookback renders both strategies with
+  no exceptions; pair + lookback preserved switching Ladder -> Band -> Ladder; band
+  sliders and Trades / Total turnover metrics present. Headless boot: all three pages
+  HTTP 200, no tracebacks.
+
+**Next:**
+- User verification of the diff, then commit (nothing staged yet, per workflow).
+- Maybe: band strategy on the leaderboard page; per-trade log for the band view.
+
+**Open questions / blockers:**
+- band_prototype.py stays untracked in the repo root (its docstring says "not
+  committed") -- flag if it should be gitignored explicitly or deleted.
+
+---
+
 ### 2026-07-05 (fix deployed 429 crash: seed price data + polygon retry)
 **Did:**
 - Diagnosed the deployed Streamlit Cloud leaderboard crash: cache/ was gitignored, so

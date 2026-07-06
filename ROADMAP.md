@@ -109,6 +109,14 @@ the curve.
   The config rates are now the fallback tier only. Engine/backtest untouched.
 - Borrow-history reader: once `cache/borrow_history.csv` has accrued a few weeks of
   rows, backtest with time-varying borrow instead of one flat rate per run.
+- [x] Band-rebalanced single-position backtest DONE 2026-07-05 (`src/band.py`): the
+  live-bot strategy as a sibling to the tranche ladder (which stays the reference
+  implementation). One continuous position, hedge frozen between trades; a trade fires
+  only when the short-notional or net-delta band trips (short-band reset re-neutralizes
+  both legs; delta trip re-neutralizes via the long leg only). All P&L through
+  engine.py. UI strategy selector on the main page (ladder / band); gates in
+  `scripts/verify_band.py` (hand-computed two-segment check, degenerate zero-trade
+  check, ladder sanity cross-check).
 
 ## Open decisions
 - (none currently — log new ones in SCRATCHPAD.md)

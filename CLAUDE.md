@@ -51,6 +51,7 @@ src/config.py     pair registry dict
 src/data.py       layer 1: get_prices() + cache + _fetch_polygon()
 src/engine.py     layer 2: pure two-leg daily P&L + borrow stub
 src/backtest.py   layer 3: loops engine over a window -> equity curve + metrics
+src/band.py       layer 3 sibling: band-rebalanced single-position backtest
 src/app.py        layer 4: streamlit UI
 .env              POLYGON_API_KEY=... (gitignored)
 cache/            price CSVs (committed seed data); borrow_*.csv (gitignored)
