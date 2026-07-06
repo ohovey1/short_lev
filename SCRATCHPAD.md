@@ -55,8 +55,21 @@ multipage runtime; from_string temp dir breaks the relative sys.path insert) -- 
 stubs the link + pins src/ absolutely; real multipage covered by headless boot (all
 three pages 200, no tracebacks).
 
+**Follow-up 2 (same day): band per-trade log.** band.py now records one row per
+band-triggered rebalance (open/close date of the closed segment, trigger name,
+entry/exit prices, per-leg P/L from the realization engine call, traded_lev/
+traded_und = that trade's turnover increments) and returns it as "trades"
+(DataFrame, matching run_backtest's key; the final still-open segment is not
+listed). app.py shows a band trades table (adds Trigger + Traded columns) and the
+per-trade P/L bar for both strategies -- bar chart factored into trade_pnl_bar()
+(second concrete use). verify_band extended: (a) asserts 1 row / 'delta band' /
+P&L 150 / traded 150-und 0-lev; (b) asserts empty trades log. All pass with
+IDENTICAL equity numbers to before (tracking is bookkeeping only); TSLL invariant
+check: len(trades) == n_trades (105), traded columns sum exactly to both turnover
+totals (100 short-band / 5 delta-band trips).
+
 **Next:**
-- Maybe: per-trade log for the band view; band params on the leaderboard rows.
+- Maybe: band params on the leaderboard rows.
 
 **Open questions / blockers:**
 - band_prototype.py: user confirmed they deleted it after adaptation (2026-07-05).

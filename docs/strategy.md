@@ -79,8 +79,11 @@ held constant: each tranche gets `base_capital / hold_days`.
     turnover mean lower real-world costs (spreads, commissions) for the same edge.
   - *Breakeven borrow* (band) -- the annualized borrow rate at which the gross
     edge would be fully consumed by borrow cost.
-- **Trades table / Trade P/L** (ladder only): each closed tranche, with both legs'
-  P/L and the net. Most trades are small wins; the green/red bars show the spread.
+- **Trades table / Trade P/L:** on the ladder, each closed tranche with both legs'
+  P/L and the net. On the band strategy, each band-triggered rebalance: which band
+  fired, the closed segment's per-leg P/L, and the dollars traded to re-neutralize
+  (the final still-open segment is not listed). Most trades are small wins; the
+  green/red bars show the spread.
 
 ## Important caveat
 **Borrow cost is included; other fees are not.** The short leg is charged daily
