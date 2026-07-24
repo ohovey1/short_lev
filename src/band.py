@@ -16,7 +16,9 @@ Also tracks margin cushion (equity - margin_required) per day as a pure
 observation: it does not feed back into the short_band/delta_band trigger
 logic above, it just reports whether a real account backing this position
 would have enough equity to meet the margin the short leg's current size
-requires.
+requires. capital_utilization (default 0.75) leaves a deliberate slice of
+base_capital undeployed as headroom against that cushion going negative --
+it reduces breach risk, it does not eliminate it.
 """
 
 import pandas as pd
@@ -27,20 +29,23 @@ import engine
 
 
 def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
-                      price_field="close", lookback_days=None,
-                      borrow_rate_annual=None):
+                      capital_utilization=0.75, price_field="close",
+                      lookback_days=None, borrow_rate_annual=None):
     """Run the band-rebalanced backtest for one pair.
 
     pair_key indexes config.PAIRS. target (the steady-state short notional) is
-    derived from base_capital via the pair's margin_multiplier: target =
-    base_capital / margin_multiplier, i.e. the short notional that base_capital
-    (cash) actually supports at that pair's margin rate. base_capital itself
-    keeps meaning "cash deployed" -- it's still the pct_return denominator.
-    Returns a dict shaped like run_backtest where fields overlap, plus the
-    trade stats (n_trades, turnover_lev, turnover_und, breakeven_borrow) and
-    margin cushion stats (margin_cushion, min_margin_cushion, margin_breached,
-    margin_breach_date) -- observation only, computed from the same
-    short_notional the band checks already use.
+    derived from base_capital via the pair's margin_multiplier and
+    capital_utilization: target = (base_capital * capital_utilization) /
+    margin_multiplier, i.e. the short notional that the utilized fraction of
+    base_capital (cash) supports at that pair's margin rate. The rest
+    (1 - capital_utilization) is deliberate slack, kept as headroom against
+    margin cushion going negative. base_capital itself keeps meaning "cash
+    deployed" -- it's still the pct_return denominator regardless of
+    utilization. Returns a dict shaped like run_backtest where fields
+    overlap, plus the trade stats (n_trades, turnover_lev, turnover_und,
+    breakeven_borrow) and margin cushion stats (margin_cushion,
+    min_margin_cushion, margin_breached, margin_breach_date) -- observation
+    only, computed from the same short_notional the band checks already use.
     """
     pair = config.PAIRS[pair_key]
     L = pair["leverage"]
@@ -55,7 +60,7 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
     lev_p = lev.loc[dates, price_field]
     und_p = und.loc[dates, price_field]
 
-    target = base_capital / pair["margin_multiplier"]  # steady-state short notional
+    target = (base_capital * capital_utilization) / pair["margin_multiplier"]  # steady-state short notional
 
     # Segment state: dollar sizes fixed at segment entry, marked by the engine.
     lev_e = lev_p.iloc[0]

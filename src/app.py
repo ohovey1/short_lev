@@ -98,12 +98,13 @@ def run(pair_key, hold_days, base_capital, lookback_days, borrow_rate_annual):
 
 
 @st.cache_data
-def run_band(pair_key, base_capital, delta_band, short_band, lookback_days,
-             borrow_rate_annual):
+def run_band(pair_key, base_capital, delta_band, short_band, capital_utilization,
+             lookback_days, borrow_rate_annual):
     """Cached wrapper for the band strategy, mirroring run()."""
     return band.run_band_backtest(
         pair_key, base_capital, delta_band=delta_band, short_band=short_band,
-        lookback_days=lookback_days, borrow_rate_annual=borrow_rate_annual,
+        capital_utilization=capital_utilization, lookback_days=lookback_days,
+        borrow_rate_annual=borrow_rate_annual,
     )
 
 
@@ -165,6 +166,11 @@ else:
         "Short band", min_value=0.05, max_value=0.30, value=0.10, step=0.01,
         help="Reset the short to target when its notional drifts this fraction from target.",
     )
+    capital_utilization = st.sidebar.slider(
+        "Capital utilization", min_value=0.25, max_value=1.0, value=0.75, step=0.05,
+        help="Fraction of base capital committed as margin; the rest is cushion "
+             "against a margin call as the position drifts.",
+    )
 
 base_capital = st.sidebar.number_input(
     "Base capital ($)", min_value=100, value=10000, step=1000
@@ -202,8 +208,8 @@ else:
         "Between trades the hedge is frozen; a trade fires only when the net delta "
         "or the short notional drifts past its band."
     )
-    result = run_band(pair_key, base_capital, delta_band, short_band, lookback,
-                      borrow_rate_annual)
+    result = run_band(pair_key, base_capital, delta_band, short_band, capital_utilization,
+                      lookback, borrow_rate_annual)
 st.warning(DISCLAIMER)
 
 pair = config.PAIRS[pair_key]

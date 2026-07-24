@@ -85,7 +85,7 @@ def check_a():
     try:
         r = band.run_band_backtest(
             PAIR_KEY, base_capital=base_capital, delta_band=0.10, short_band=10.0,
-            borrow_rate_annual=0.0,
+            capital_utilization=1.0, borrow_rate_annual=0.0,
         )
     finally:
         data.get_prices = real_get_prices
@@ -132,7 +132,7 @@ def check_b():
 
     r = band.run_band_backtest(
         PAIR_KEY, base_capital=base, delta_band=10.0, short_band=10.0,
-        borrow_rate_annual=rate,
+        capital_utilization=1.0, borrow_rate_annual=rate,
     )
 
     # Independent re-derivation, mirroring band.py's alignment.
@@ -169,7 +169,8 @@ def check_c():
     rate = config.PAIRS[PAIR_KEY]["borrow_rate_annual"]
     base = 10000.0
 
-    b = band.run_band_backtest(PAIR_KEY, base_capital=base, borrow_rate_annual=rate)
+    b = band.run_band_backtest(PAIR_KEY, base_capital=base, capital_utilization=1.0,
+                               borrow_rate_annual=rate)
     l = backtest.run_backtest(PAIR_KEY, hold_days=5, base_capital=base,
                               borrow_rate_annual=rate)
 
@@ -184,55 +185,131 @@ def check_c():
 
 
 def check_d():
-    """Formula check: target = base_capital / margin_multiplier.
+    """Formula check: target = (base_capital * capital_utilization) / margin_multiplier.
 
-    TSLL's margin_multiplier is 1.60 (config.py) -- base_capital=10000 should
-    resolve to target=6250, matching the hand-worked TSLA/TSLL example."""
-    print("--- d. target = base_capital / margin_multiplier (TSLL) ---")
+    TSLL's margin_multiplier is 1.60 (config.py); at the new default
+    capital_utilization=0.75, base_capital=10000 should resolve to
+    target = 10000*0.75/1.6 = 4687.5."""
+    print("--- d. target = (base_capital * capital_utilization) / margin_multiplier (TSLL) ---")
     mm = config.PAIRS["TSLL"]["margin_multiplier"]
     base_capital = 10000.0
-    target = base_capital / mm
-    ok = abs(target - 6250.0) < 1e-9
+    capital_utilization = 0.75
+    target = (base_capital * capital_utilization) / mm
+    expected = 4687.5
+    ok = abs(target - expected) < 1e-9
     return check(
         "d", ok,
-        f"TSLL margin_multiplier {mm}, base_capital {base_capital:.2f} "
-        f"-> target {target:.4f} (expected 6250.0000)",
+        f"TSLL margin_multiplier {mm}, base_capital {base_capital:.2f}, "
+        f"capital_utilization {capital_utilization} -> target {target:.4f} "
+        f"(expected {expected:.4f})",
     )
 
 
 def check_e():
-    """Margin cushion: entry-day cushion is -one day's borrow (not exactly 0),
-    and TSLL over its full cached window with default bands does breach
-    (min_margin_cushion < 0) -- a concrete historical gate, not a synthetic
-    assumption (confirmed by hand-reconstructing the loop before writing
-    this check: min cushion ~ -976 on 2024-07-10, 97/500 days negative)."""
-    print("--- e. Margin cushion (TSLL, full window, config borrow) ---")
+    """Margin cushion at the new default (capital_utilization=0.75): entry-day
+    cushion is (1 - utilization)*base_capital - one day's borrow (deliberate
+    headroom, not exactly 0 or exactly the raw slack), and TSLL over its full
+    cached window with default bands no longer breaches at this setting --
+    confirmed by hand-reconstructing the loop before writing this check: all
+    13 configured pairs drop to zero breach-days at 0.75 vs. breaching at 1.0
+    (see check_g for the cross-pair sweep this check's TSLL case is part of)."""
+    print("--- e. Margin cushion at capital_utilization=0.75 (TSLL, full window) ---")
     pair = config.PAIRS["TSLL"]
     rate = pair["borrow_rate_annual"]
     base_capital = 10000.0
-    target = base_capital / pair["margin_multiplier"]
+    capital_utilization = 0.75
+    target = (base_capital * capital_utilization) / pair["margin_multiplier"]
 
-    r = band.run_band_backtest("TSLL", base_capital=base_capital, borrow_rate_annual=rate)
+    r = band.run_band_backtest(
+        "TSLL", base_capital=base_capital, capital_utilization=capital_utilization,
+        borrow_rate_annual=rate,
+    )
 
-    expected_entry_cushion = -engine.borrow_cost(target, rate)
+    expected_entry_cushion = (1 - capital_utilization) * base_capital - engine.borrow_cost(target, rate)
     got_entry_cushion = r["margin_cushion"].iloc[0]
 
     ok = (
         abs(got_entry_cushion - expected_entry_cushion) < 1e-6
-        and r["margin_breached"] is True
-        and r["min_margin_cushion"] < 0
+        and r["margin_breached"] is False
+        and r["min_margin_cushion"] >= 0
     )
     return check(
         "e", ok,
         f"entry cushion {got_entry_cushion:.6f} (expected {expected_entry_cushion:.6f}); "
         f"margin_breached {r['margin_breached']}, min_margin_cushion "
-        f"{r['min_margin_cushion']:.2f} on {r['margin_breach_date']} (expected breached, "
-        f"min < 0)",
+        f"{r['min_margin_cushion']:.2f} (expected not breached, min >= 0)",
     )
 
 
+def check_f():
+    """Backward compatibility: capital_utilization=1.0 exactly reproduces the
+    prior (pre-cushion-knob) sizing -- target = base_capital / margin_multiplier,
+    TSLL -> 6250.0 -- and TSLL still breaches at that setting (the same
+    historical fact check_e used to assert before the default changed)."""
+    print("--- f. capital_utilization=1.0 backward compatibility (TSLL) ---")
+    pair = config.PAIRS["TSLL"]
+    rate = pair["borrow_rate_annual"]
+    base_capital = 10000.0
+    mm = pair["margin_multiplier"]
+    target = (base_capital * 1.0) / mm
+    expected_target = 6250.0
+
+    r = band.run_band_backtest(
+        "TSLL", base_capital=base_capital, capital_utilization=1.0,
+        borrow_rate_annual=rate,
+    )
+
+    ok = (
+        abs(target - expected_target) < 1e-9
+        and r["margin_breached"] is True
+        and r["min_margin_cushion"] < 0
+    )
+    return check(
+        "f", ok,
+        f"target {target:.4f} (expected {expected_target:.4f}); margin_breached "
+        f"{r['margin_breached']}, min_margin_cushion {r['min_margin_cushion']:.2f} "
+        f"(expected breached, min < 0 -- matches pre-cushion-knob behavior)",
+    )
+
+
+def check_g():
+    """Directional sweep: for every configured pair, capital_utilization=0.75
+    must not increase breach-days vs. 1.0, and at least one pair must show a
+    strict improvement (so the check can't trivially pass if the knob did
+    nothing). Does not assert zero breaches anywhere -- that's an empirical
+    fact about today's cached data, not a guarantee this sizing holds for
+    every future pair/base_capital/band combination."""
+    print("--- g. Breach-day sweep across all pairs, 1.0 vs 0.75 ---")
+    base_capital = 10000.0
+    all_ok = True
+    any_improved = False
+    lines = []
+    for pair_key, pair in config.PAIRS.items():
+        rate = pair["borrow_rate_annual"]
+        r1 = band.run_band_backtest(
+            pair_key, base_capital=base_capital, capital_utilization=1.0,
+            borrow_rate_annual=rate,
+        )
+        r75 = band.run_band_backtest(
+            pair_key, base_capital=base_capital, capital_utilization=0.75,
+            borrow_rate_annual=rate,
+        )
+        days1 = int((r1["margin_cushion"] < 0).sum())
+        days75 = int((r75["margin_cushion"] < 0).sum())
+        pair_ok = days75 <= days1
+        all_ok = all_ok and pair_ok
+        any_improved = any_improved or (days75 < days1)
+        lines.append(f"{pair_key}: {days1} -> {days75} days{'  [FAIL]' if not pair_ok else ''}")
+
+    ok = all_ok and any_improved
+    detail = "; ".join(lines) + f"\n  all pairs non-increasing: {all_ok}, at least one improved: {any_improved}"
+    return check("g", ok, detail)
+
+
 def main():
-    results = [check_a(), check_b(), check_c(), check_d(), check_e()]
+    results = [
+        check_a(), check_b(), check_c(), check_d(), check_e(), check_f(), check_g(),
+    ]
     print("=" * 60)
     if all(results):
         print("All band checks PASSED.")

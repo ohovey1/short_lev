@@ -2,7 +2,7 @@
 
 | Term | Meaning |
 |---|---|
-| **target** | Fixed dollar size the strategy holds the short leg at. Set once, everything else is measured against it. `target = base_capital ÷ margin_multiplier`. |
+| **target** | Fixed dollar size the strategy holds the short leg at. Set once, everything else is measured against it. `target = (base_capital × capital_utilization) ÷ margin_multiplier`. |
 | **short notional** | Current mark-to-market value of the short leg (`short_size × price_now/price_entry`). Moves with price in either direction. |
 | **net delta** | `long_notional − leverage × short_notional`. The imbalance between the two legs — how far off-hedge the position currently is. |
 | **short_band** | % threshold on short notional vs. `target`. Trip it → reset both legs back to `target`. |
@@ -14,3 +14,4 @@
 | **breakeven borrow rate** | The annualized borrow rate at which gross decay P&L would be fully consumed by borrow. Used to rank pairs. |
 | **margin required** | `margin_multiplier × short_notional` — the cash the short leg's *current* size actually requires, day by day (not just at entry). |
 | **margin cushion** | `equity − margin_required`. Negative means a real account backing this position would be under a margin call at that size — observation only, does not change when trades fire. |
+| **capital_utilization** | Fraction of `base_capital` committed as margin (default 0.75). `1 − capital_utilization` is deliberate slack kept as headroom against margin cushion going negative — reduces breach risk, does not guarantee zero breaches. |

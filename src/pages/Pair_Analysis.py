@@ -65,7 +65,7 @@ if strategy == "Ladder":
         "Hold days", min_value=1, max_value=max(2, lookback_for_bounds // 2),
         value=min(5, max(2, lookback_for_bounds // 2)),
     )
-    delta_band = short_band = None
+    delta_band = short_band = capital_utilization = None
 else:
     delta_band = st.sidebar.slider(
         "Delta band", min_value=0.05, max_value=0.30, value=0.10, step=0.01,
@@ -74,6 +74,11 @@ else:
     short_band = st.sidebar.slider(
         "Short band", min_value=0.05, max_value=0.30, value=0.10, step=0.01,
         help="Reset the short to target when its notional drifts this fraction from target.",
+    )
+    capital_utilization = st.sidebar.slider(
+        "Capital utilization", min_value=0.25, max_value=1.0, value=0.75, step=0.05,
+        help="Fraction of base capital committed as margin; the rest is cushion "
+             "against a margin call as the position drifts.",
     )
     hold_days = None
 
@@ -103,13 +108,14 @@ if rates is not None:
 
 
 @st.cache_data
-def leaderboard(strategy, hold_days, delta_band, short_band, base_capital,
-                lookback_days, live):
+def leaderboard(strategy, hold_days, delta_band, short_band, capital_utilization,
+                base_capital, lookback_days, live):
     """Gross + net run of the selected strategy for every pair, one row each.
 
     Net rate per pair: the live rate from the live dict where present, else
-    the pair's config rate. hold_days applies to the ladder; delta_band and
-    short_band to the band strategy (the other strategy's params are None).
+    the pair's config rate. hold_days applies to the ladder; delta_band,
+    short_band, and capital_utilization to the band strategy (the other
+    strategy's params are None).
     """
     def run(pair_key, rate):
         if strategy == "Ladder":
@@ -119,7 +125,8 @@ def leaderboard(strategy, hold_days, delta_band, short_band, base_capital,
             )
         return band.run_band_backtest(
             pair_key, base_capital, delta_band=delta_band, short_band=short_band,
-            lookback_days=lookback_days, borrow_rate_annual=rate,
+            capital_utilization=capital_utilization, lookback_days=lookback_days,
+            borrow_rate_annual=rate,
         )
 
     rows = []
@@ -167,8 +174,8 @@ else:
         "Live IBKR borrow rates unavailable -- all rows use config fallback rates."
     )
 
-df = leaderboard(strategy, hold_days, delta_band, short_band, base_capital,
-                 lookback_days, live)
+df = leaderboard(strategy, hold_days, delta_band, short_band, capital_utilization,
+                 base_capital, lookback_days, live)
 df = df.sort_values("Net return %", ascending=False)
 df.insert(0, "Rank", range(1, len(df) + 1))
 
