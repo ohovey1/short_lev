@@ -154,6 +154,8 @@ def leaderboard(strategy, hold_days, delta_band, short_band, base_capital,
             "Borrow rate (used) %": net_rate * 100,
             "Breakeven borrow rate % (annualized)": breakeven * 100,
         })
+        if strategy == "Band":
+            row["Min margin cushion ($)"] = net["min_margin_cushion"]
         rows.append(row)
     return pd.DataFrame(rows)
 

@@ -12,3 +12,5 @@
 | **margin multiplier** | How much cash a given short notional actually requires (≈1.6x for TSLA/TSLL, pair-dependent). Lives in `config.PAIRS[...]["margin_multiplier"]`. |
 | **borrow cost** | Daily charge on short notional at the pair's borrow rate — the real cost that eats into decay P&L. |
 | **breakeven borrow rate** | The annualized borrow rate at which gross decay P&L would be fully consumed by borrow. Used to rank pairs. |
+| **margin required** | `margin_multiplier × short_notional` — the cash the short leg's *current* size actually requires, day by day (not just at entry). |
+| **margin cushion** | `equity − margin_required`. Negative means a real account backing this position would be under a margin call at that size — observation only, does not change when trades fire. |

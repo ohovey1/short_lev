@@ -11,6 +11,12 @@ marks each segment from its entry prices. Trades happen only when a band trips:
 All P&L math goes through engine.position_pnl / engine.borrow_cost, same as
 backtest.py. This file holds only state (the current segment) and the band
 policy.
+
+Also tracks margin cushion (equity - margin_required) per day as a pure
+observation: it does not feed back into the short_band/delta_band trigger
+logic above, it just reports whether a real account backing this position
+would have enough equity to meet the margin the short leg's current size
+requires.
 """
 
 import pandas as pd
@@ -31,7 +37,10 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
     (cash) actually supports at that pair's margin rate. base_capital itself
     keeps meaning "cash deployed" -- it's still the pct_return denominator.
     Returns a dict shaped like run_backtest where fields overlap, plus the
-    trade stats (n_trades, turnover_lev, turnover_und, breakeven_borrow).
+    trade stats (n_trades, turnover_lev, turnover_und, breakeven_borrow) and
+    margin cushion stats (margin_cushion, min_margin_cushion, margin_breached,
+    margin_breach_date) -- observation only, computed from the same
+    short_notional the band checks already use.
     """
     pair = config.PAIRS[pair_key]
     L = pair["leverage"]
@@ -64,6 +73,7 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
     seg_date = dates[0]  # entry date of the current segment
     trades = []          # one row per band-triggered rebalance (closed segment)
     equity = []
+    margin_cushion = []  # equity - margin_required, per day
 
     for date in dates:
         lev_now = lev_p.loc[date]
@@ -120,7 +130,11 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
         r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
         equity.append(realized + r["net"] - borrow_paid)
 
+        margin_required = pair["margin_multiplier"] * short_notional
+        margin_cushion.append(equity[-1] + base_capital - margin_required)
+
     equity_curve = pd.Series(equity, index=dates, name="equity")
+    margin_cushion_series = pd.Series(margin_cushion, index=dates, name="margin_cushion")
     daily_pnl = equity_curve.diff()
     total_return = equity_curve.iloc[-1]
 
@@ -140,6 +154,13 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
         "turnover_lev": turnover_lev,
         "turnover_und": turnover_und,
         "breakeven_borrow": engine.breakeven_borrow_rate(total_return + borrow_paid, notional_days),
+        "margin_cushion": margin_cushion_series,
+        "min_margin_cushion": margin_cushion_series.min(),
+        "margin_breached": bool(margin_cushion_series.min() < 0),
+        "margin_breach_date": (
+            margin_cushion_series[margin_cushion_series < 0].index[0]
+            if margin_cushion_series.min() < 0 else None
+        ),
         "lev_ohlc": lev_ohlc,
         "und_ohlc": und_ohlc,
     }

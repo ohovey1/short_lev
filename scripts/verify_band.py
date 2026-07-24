@@ -200,8 +200,39 @@ def check_d():
     )
 
 
+def check_e():
+    """Margin cushion: entry-day cushion is -one day's borrow (not exactly 0),
+    and TSLL over its full cached window with default bands does breach
+    (min_margin_cushion < 0) -- a concrete historical gate, not a synthetic
+    assumption (confirmed by hand-reconstructing the loop before writing
+    this check: min cushion ~ -976 on 2024-07-10, 97/500 days negative)."""
+    print("--- e. Margin cushion (TSLL, full window, config borrow) ---")
+    pair = config.PAIRS["TSLL"]
+    rate = pair["borrow_rate_annual"]
+    base_capital = 10000.0
+    target = base_capital / pair["margin_multiplier"]
+
+    r = band.run_band_backtest("TSLL", base_capital=base_capital, borrow_rate_annual=rate)
+
+    expected_entry_cushion = -engine.borrow_cost(target, rate)
+    got_entry_cushion = r["margin_cushion"].iloc[0]
+
+    ok = (
+        abs(got_entry_cushion - expected_entry_cushion) < 1e-6
+        and r["margin_breached"] is True
+        and r["min_margin_cushion"] < 0
+    )
+    return check(
+        "e", ok,
+        f"entry cushion {got_entry_cushion:.6f} (expected {expected_entry_cushion:.6f}); "
+        f"margin_breached {r['margin_breached']}, min_margin_cushion "
+        f"{r['min_margin_cushion']:.2f} on {r['margin_breach_date']} (expected breached, "
+        f"min < 0)",
+    )
+
+
 def main():
-    results = [check_a(), check_b(), check_c(), check_d()]
+    results = [check_a(), check_b(), check_c(), check_d(), check_e()]
     print("=" * 60)
     if all(results):
         print("All band checks PASSED.")

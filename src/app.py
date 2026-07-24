@@ -257,13 +257,14 @@ else:
     c7, c8, c9 = st.columns(3)
     c7.metric("Borrow paid", f"${result['borrow_paid']:,.2f}")
     c8.metric("Borrow rate (annual)", f"{borrow_rate_annual:.2%} ({borrow_source})")
-    c9.metric("Breakeven borrow", f"{result['breakeven_borrow']:.2%}")
-    c10, c11, _ = st.columns(3)
+    c9.metric("Min margin cushion", f"${result['min_margin_cushion']:,.2f}")
+    c10, c11, c12 = st.columns(3)
     c10.metric("Trades", f"{result['n_trades']}")
     c11.metric(
         "Total turnover",
         f"${result['turnover_lev'] + result['turnover_und']:,.2f}",
     )
+    c12.metric("Breakeven borrow", f"{result['breakeven_borrow']:.2%}")
 
 st.subheader("Equity curve ($)")
 # Display offset only: equity = starting capital + cumulative P/L (not P&L math).
