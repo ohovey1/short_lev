@@ -118,5 +118,77 @@ the curve.
   `scripts/verify_band.py` (hand-computed two-segment check, degenerate zero-trade
   check, ladder sanity cross-check).
 
+## v3 — automation (do NOT build yet)
+Phases and gates mirror `docs/AUTOMATION.md` -- that doc is the fuller spec; this section is
+the trackable checklist version, with an explicit "success looks like" added per phase since
+"Done when" alone tells you a phase technically works, not that it's actually safe to move
+past.
+
+### Phase 1 — signal-only bot
+- [ ] Poll live IBKR quotes for pairs flagged `live: true` in `config.py` (flag TBD, see open
+  decisions).
+- [ ] Run through existing `band.py` logic unchanged -- no new P&L math.
+- [ ] On a band trip: push a notification (channel TBD) with the pair and the recommended
+  rebalancing trade. No order submission.
+- [ ] Log every check (tripped or not) and every notification sent.
+
+**Done when:** the bot runs on a schedule against IBKR quotes, correctly identifies a band
+trip against a known test case, and a notification arrives with the right trade.
+**Success looks like:** a full week of scheduled checks with zero missed runs and zero false
+trips against hand-verified band math.
+
+### Phase 2 — semi-manual execution
+- [ ] Execute notified trades by hand.
+- [ ] Reconcile actual fills against backtest assumptions (slippage, fill timing, borrow cost
+  realized vs. modeled).
+- [ ] Run for several weeks minimum before automating execution.
+
+**Done when:** a handful of live-notified trades have been manually executed and reconciled,
+with no unexplained gap versus backtest assumptions.
+**Success looks like:** a run of reconciled trades landing within a small, pre-agreed slippage
+tolerance of modeled fill price, and realized borrow within a few points of the rate assumed.
+
+### Phase 3 — broker integration (paper)
+- [ ] `ib_async` + IB Gateway on Hetzner (or an always-on local machine first).
+- [ ] IBC for headless login and daily-restart handling (IBKR resets sessions nightly).
+- [ ] Connect to the paper account first. Same Phase 1 signal logic, now auto-submitting
+  orders instead of just notifying.
+- [ ] **Blocking open decision (see below):** confirm IBKR's current 2FA policy for
+  unattended headless logins before committing to Hetzner as the always-on host.
+
+**Done when:** the bot runs unattended against paper for at least a few weeks with no manual
+intervention needed to recover from a disconnect or restart.
+**Success looks like:** several consecutive weeks unattended, zero missed band checks, zero
+manual recoveries needed at the nightly IBKR reset.
+
+### Phase 4 — live capital
+- [ ] Switch config (host/port/credentials) from paper to live -- no logic changes.
+- [ ] Start at small size, scale up gradually.
+- [ ] Run in parallel with, not instead of, the regime stress-testing already planned for the
+  strategy itself (deep-history runs, borrow-rate stress multiples) -- automating an
+  unstress-tested strategy compounds risk rather than reducing it.
+
+**Done when:** to be defined once Phase 3 is complete -- don't backfill this now.
+**Success looks like:** live turnover/trade count tracking backtest-predicted levels for the
+same window, no unexplained slippage, and only reached once the strategy's own regime
+stress-testing is done -- "it automated cleanly" is not success if the underlying strategy is
+still unvalidated against adverse regimes.
+
 ## Open decisions
-- (none currently — log new ones in SCRATCHPAD.md)
+- **`target` derivation** -- fixed cash figure vs. equity-scaling over time. No decision yet;
+  do not silently add reinvestment/scaling logic (see CLAUDE.md strategy section).
+- **Per-pair margin multiplier** -- needs to land in `config.py` once real position sizing is
+  implemented; margin requirements differ meaningfully by pair (single-stock leveraged ETFs
+  vs. broad-index leveraged ETFs get different house margin treatment).
+- **Live-vs-backtest pair flag** -- which of the 13 pairs actually trade live vs. stay
+  backtest/research-only; needs a field in `config.py`.
+- **Notification channel** -- Slack vs. email, not yet chosen.
+- **VPS vs. always-on local machine** for Phase 3, not yet chosen.
+- **IBKR 2FA / unattended login policy** -- blocking for Phase 3. IBC can automate credential
+  entry, but mobile-push 2FA may not have a clean unattended bypass on standard retail
+  accounts. Needs direct confirmation (security code card exemption vs. accepting a manual
+  intervention window at the nightly reset) before Hetzner is treated as viable for Phase 3.
+- **Portfolio Margin upgrade timing** relative to the $100k threshold -- depends on capital
+  available at automation time, not blocking now. Also worth noting when it comes up:
+  Portfolio Margin's correlation offsets are for broad-based index products -- single-stock
+  pairs (TSLA/TSLL etc.) may see little or no benefit from it even above $100k.

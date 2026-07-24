@@ -50,17 +50,31 @@ def fake_ohlc(closes):
 def check_a():
     """Two-segment hand check: one delta-band trip on fabricated prices.
 
-    L=3, target=1000, delta_band=0.10, short_band=10.0 (never trips), borrow 0.
+    L=3, margin_multiplier=1.65 (TQQQ config), base_capital=1000 ->
+    target = 1000/1.65 = 20000/33 = 606.060606..., delta_band=0.10,
+    short_band=10.0 (never trips), borrow 0.
       d0 (100, 100): entry, no trip, equity 0.
-      d1 (100, 105): long notional 3150, net_delta +150 > 100 -> delta trip.
-          Realized = 3000 * 5% = 150; long reset to 3000 at (100, 105).
-      d2 (102, 106): net_delta ~ -31.4, no trip.
-      d3 (101, 104): net_delta ~ -58.6, no trip.
-          Final equity = 150 + (-1000*0.01 + 3000*(104/105 - 1))
-                       = 150 - 10 - 200/7 = 111.428571...
+      d1 (100, 105): short_notional = target (unchanged, lev flat) -> no short
+          trip. long_notional = 3*target*105/100 = 21000/11 = 1909.090909.
+          net_delta = long_notional - 3*target = 1000/11 = 90.909091, which
+          exceeds delta_band*target = 2000/33 = 60.606061 -> delta trip.
+          Realized = short_pnl(0) + long_pnl(3*target*5%) = 1000/11 = 90.909091.
+          Long reset to long_notional (1818.181818) at (100, 105); short
+          carries at its current notional (606.060606, unchanged since lev
+          didn't move).
+      d2 (102, 106): short_notional = 606.06.../100*102 = 618.18..., net_delta
+          ~ -19.05, no trip (threshold 60.606061).
+      d3 (101, 104): short_notional ~ 612.12, net_delta ~ -35.50, no trip.
+          Final segment (100,105)->(101,104): short_pnl = -606.060606*1% =
+          -6.060606; long_pnl = 1818.181818*(104/105-1) = -1800/77-(-6.060606)...
+          net = -1800/77 = -23.376623.
+          Final equity = 1000/11 - 1800/77 = 5200/77 = 67.532468.
     """
     print("--- a. Hand-computed two-segment check (fabricated 4-day window) ---")
     pair = config.PAIRS[PAIR_KEY]
+    mm = pair["margin_multiplier"]
+    base_capital = 1000.0
+    target = base_capital / mm
     fake = {
         pair["leveraged_ticker"]: fake_ohlc([100.0, 100.0, 102.0, 101.0]),
         pair["underlying_ticker"]: fake_ohlc([100.0, 105.0, 106.0, 104.0]),
@@ -70,26 +84,28 @@ def check_a():
     data.get_prices = lambda ticker: fake[ticker]
     try:
         r = band.run_band_backtest(
-            PAIR_KEY, base_capital=1000, delta_band=0.10, short_band=10.0,
+            PAIR_KEY, base_capital=base_capital, delta_band=0.10, short_band=10.0,
             borrow_rate_annual=0.0,
         )
     finally:
         data.get_prices = real_get_prices
 
-    expected = 150.0 - 10.0 - 200.0 / 7.0
+    trip_pnl = 1000.0 / 11.0
+    traded_und = trip_pnl  # net_delta at the trip equals the day-1 realized net here
+    expected = 5200.0 / 77.0
     got = r["equity_curve"].iloc[-1]
     t = r["trades"]
     trades_ok = (
         len(t) == 1
         and t.iloc[0]["trigger"] == "delta band"
-        and abs(t.iloc[0]["total_pnl"] - 150.0) < 1e-6
-        and abs(t.iloc[0]["traded_und"] - 150.0) < 1e-6
+        and abs(t.iloc[0]["total_pnl"] - trip_pnl) < 1e-6
+        and abs(t.iloc[0]["traded_und"] - traded_und) < 1e-6
         and t.iloc[0]["traded_lev"] == 0.0
     )
     ok = (
         abs(got - expected) < 1e-6
         and r["n_trades"] == 1
-        and abs(r["turnover_und"] - 150.0) < 1e-9
+        and abs(r["turnover_und"] - traded_und) < 1e-9
         and r["turnover_lev"] == 0.0
         and trades_ok
     )
@@ -98,9 +114,9 @@ def check_a():
         f"final equity {got:.6f} (expected {expected:.6f}), "
         f"n_trades {r['n_trades']} (expected 1), "
         f"turnover und {r['turnover_und']:.2f} / lev {r['turnover_lev']:.2f} "
-        f"(expected 150.00 / 0.00); trades log: {len(t)} row(s), "
+        f"(expected {traded_und:.2f} / 0.00); trades log: {len(t)} row(s), "
         f"trigger '{t.iloc[0]['trigger']}', P/L {t.iloc[0]['total_pnl']:.2f} "
-        f"(expected 1 x 'delta band' x 150.00)",
+        f"(expected 1 x 'delta band' x {trip_pnl:.2f})",
     )
 
 
@@ -112,6 +128,7 @@ def check_b():
     pair = config.PAIRS[PAIR_KEY]
     rate = pair["borrow_rate_annual"]
     base = 10000.0
+    target = base / pair["margin_multiplier"]
 
     r = band.run_band_backtest(
         PAIR_KEY, base_capital=base, delta_band=10.0, short_band=10.0,
@@ -127,10 +144,10 @@ def check_b():
 
     interval = engine.position_pnl(
         lev_p.iloc[0], lev_p.iloc[-1], und_p.iloc[0], und_p.iloc[-1],
-        base, pair["leverage"] * base,
+        target, pair["leverage"] * target,
     )
     borrow = sum(
-        engine.borrow_cost(base * (lev_p.loc[d] / lev_p.iloc[0]), rate)
+        engine.borrow_cost(target * (lev_p.loc[d] / lev_p.iloc[0]), rate)
         for d in dates
     )
     expected = interval["net"] - borrow
@@ -166,8 +183,25 @@ def check_c():
     )
 
 
+def check_d():
+    """Formula check: target = base_capital / margin_multiplier.
+
+    TSLL's margin_multiplier is 1.60 (config.py) -- base_capital=10000 should
+    resolve to target=6250, matching the hand-worked TSLA/TSLL example."""
+    print("--- d. target = base_capital / margin_multiplier (TSLL) ---")
+    mm = config.PAIRS["TSLL"]["margin_multiplier"]
+    base_capital = 10000.0
+    target = base_capital / mm
+    ok = abs(target - 6250.0) < 1e-9
+    return check(
+        "d", ok,
+        f"TSLL margin_multiplier {mm}, base_capital {base_capital:.2f} "
+        f"-> target {target:.4f} (expected 6250.0000)",
+    )
+
+
 def main():
-    results = [check_a(), check_b(), check_c()]
+    results = [check_a(), check_b(), check_c(), check_d()]
     print("=" * 60)
     if all(results):
         print("All band checks PASSED.")

@@ -26,9 +26,12 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
     """Run the band-rebalanced backtest for one pair.
 
     pair_key indexes config.PAIRS. target (the steady-state short notional) is
-    base_capital, matching the ladder's total deployed capital. Returns a dict
-    shaped like run_backtest where fields overlap, plus the trade stats
-    (n_trades, turnover_lev, turnover_und, breakeven_borrow).
+    derived from base_capital via the pair's margin_multiplier: target =
+    base_capital / margin_multiplier, i.e. the short notional that base_capital
+    (cash) actually supports at that pair's margin rate. base_capital itself
+    keeps meaning "cash deployed" -- it's still the pct_return denominator.
+    Returns a dict shaped like run_backtest where fields overlap, plus the
+    trade stats (n_trades, turnover_lev, turnover_und, breakeven_borrow).
     """
     pair = config.PAIRS[pair_key]
     L = pair["leverage"]
@@ -43,7 +46,7 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
     lev_p = lev.loc[dates, price_field]
     und_p = und.loc[dates, price_field]
 
-    target = base_capital  # steady-state short notional, matches the ladder's total
+    target = base_capital / pair["margin_multiplier"]  # steady-state short notional
 
     # Segment state: dollar sizes fixed at segment entry, marked by the engine.
     lev_e = lev_p.iloc[0]
