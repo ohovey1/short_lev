@@ -24,22 +24,37 @@ reference implementation the band strategy is checked against.
 
 ## Band rebalancing (default)
 
-Hold **one continuous position**: short about `base capital` of the leveraged ETF,
-long `leverage` times that of the underlying. Between trades nothing is touched --
-the hedge is frozen and the position simply marks to market. A trade fires only
-when the position drifts past a band:
+Hold **one continuous position**: short a fixed `target` notional of the leveraged
+ETF, long `leverage` times that of the underlying. `target` is not simply base
+capital -- it's `(base_capital x capital_utilization) / margin_multiplier`. Between
+trades nothing is touched -- the hedge is frozen and the position simply marks to
+market. A trade fires only when the position drifts past a band:
 
-- **Short band:** if the short leg's notional drifts more than `short_band` (e.g.
-  10%) of target away from target, reset the short back to target and re-neutralize
-  both legs.
-- **Delta band:** otherwise, if the net delta (long notional minus leverage times
-  short notional) exceeds `delta_band` of target, re-neutralize using the **long
-  leg only** -- the short keeps running at its current value.
+- **Foil Decay Band:** if the short leg's notional drifts more than `foil_decay_band`
+  (e.g. 10%) of target away from target, reset the short back to target and
+  re-neutralize both legs.
+- **Long-Short Band:** otherwise, if the net delta (long notional minus leverage
+  times short notional) exceeds `long_short_band` of target, re-neutralize using
+  the **long leg only** -- the short keeps running at its current value.
 
 No fixed schedule, few trades, each one only when the hedge has genuinely drifted.
 Borrow accrues daily on whatever the short notional currently is. The band widths
 are the two sidebar sliders: wider bands mean fewer trades (less turnover) but a
 sloppier hedge.
+
+**Margin multiplier and capital utilization.** Shorting a leveraged ETF and holding
+the offsetting long both require margin collateral, and the two legs aren't netted
+below Portfolio Margin thresholds -- `margin_multiplier` is a fixed, per-pair number
+(set in the pair registry, not a sidebar control) for how much cash a dollar of short
+notional actually ties up. `capital_utilization` (a sidebar slider, default 0.75) is
+the fraction of base capital actually deployed as margin; the rest is deliberate
+slack, kept as headroom against a margin call as the position drifts. Lower
+utilization means a smaller position and more cushion; 1.0 uses all of base capital
+with no cushion -- the "Min margin cushion" metric below shows how close the run came
+to breaching.
+
+Full mechanics, the closing rules, and a worked numeric example:
+[`docs/STRATEGY_SPEC.md`](./STRATEGY_SPEC.md).
 
 ## The tranche ladder (reference)
 
