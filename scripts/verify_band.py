@@ -4,8 +4,8 @@ Run from the project root:
     .venv/Scripts/python.exe scripts/verify_band.py
 
 Three checks:
-  a. Hand-computed two-segment run on 4 fabricated days that trip the delta
-     band exactly once (short band disabled by making it huge).
+  a. Hand-computed two-segment run on 4 fabricated days that trip the
+     long-short band exactly once (foil decay band disabled by making it huge).
   b. Degenerate run on real cached data with both bands huge: zero trades, so
      the equity must equal one engine.position_pnl interval (first -> last
      close) minus independently re-derived accrued borrow.
@@ -48,16 +48,16 @@ def fake_ohlc(closes):
 
 
 def check_a():
-    """Two-segment hand check: one delta-band trip on fabricated prices.
+    """Two-segment hand check: one long-short-band trip on fabricated prices.
 
     L=3, margin_multiplier=1.65 (TQQQ config), base_capital=1000 ->
-    target = 1000/1.65 = 20000/33 = 606.060606..., delta_band=0.10,
-    short_band=10.0 (never trips), borrow 0.
+    target = 1000/1.65 = 20000/33 = 606.060606..., long_short_band=0.10,
+    foil_decay_band=10.0 (never trips), borrow 0.
       d0 (100, 100): entry, no trip, equity 0.
-      d1 (100, 105): short_notional = target (unchanged, lev flat) -> no short
-          trip. long_notional = 3*target*105/100 = 21000/11 = 1909.090909.
+      d1 (100, 105): short_notional = target (unchanged, lev flat) -> no foil
+          decay trip. long_notional = 3*target*105/100 = 21000/11 = 1909.090909.
           net_delta = long_notional - 3*target = 1000/11 = 90.909091, which
-          exceeds delta_band*target = 2000/33 = 60.606061 -> delta trip.
+          exceeds long_short_band*target = 2000/33 = 60.606061 -> long-short trip.
           Realized = short_pnl(0) + long_pnl(3*target*5%) = 1000/11 = 90.909091.
           Long reset to long_notional (1818.181818) at (100, 105); short
           carries at its current notional (606.060606, unchanged since lev
@@ -84,7 +84,7 @@ def check_a():
     data.get_prices = lambda ticker: fake[ticker]
     try:
         r = band.run_band_backtest(
-            PAIR_KEY, base_capital=base_capital, delta_band=0.10, short_band=10.0,
+            PAIR_KEY, base_capital=base_capital, long_short_band=0.10, foil_decay_band=10.0,
             capital_utilization=1.0, borrow_rate_annual=0.0,
         )
     finally:
@@ -97,7 +97,7 @@ def check_a():
     t = r["trades"]
     trades_ok = (
         len(t) == 1
-        and t.iloc[0]["trigger"] == "delta band"
+        and t.iloc[0]["trigger"] == "long-short band"
         and abs(t.iloc[0]["total_pnl"] - trip_pnl) < 1e-6
         and abs(t.iloc[0]["traded_und"] - traded_und) < 1e-6
         and t.iloc[0]["traded_lev"] == 0.0
@@ -116,7 +116,7 @@ def check_a():
         f"turnover und {r['turnover_und']:.2f} / lev {r['turnover_lev']:.2f} "
         f"(expected {traded_und:.2f} / 0.00); trades log: {len(t)} row(s), "
         f"trigger '{t.iloc[0]['trigger']}', P/L {t.iloc[0]['total_pnl']:.2f} "
-        f"(expected 1 x 'delta band' x {trip_pnl:.2f})",
+        f"(expected 1 x 'long-short band' x {trip_pnl:.2f})",
     )
 
 
@@ -131,7 +131,7 @@ def check_b():
     target = base / pair["margin_multiplier"]
 
     r = band.run_band_backtest(
-        PAIR_KEY, base_capital=base, delta_band=10.0, short_band=10.0,
+        PAIR_KEY, base_capital=base, long_short_band=10.0, foil_decay_band=10.0,
         capital_utilization=1.0, borrow_rate_annual=rate,
     )
 
