@@ -169,4 +169,44 @@ prefix. Do not commit until I have reviewed the diff.
 
 ## Result
 
-*(Fill in after the session: gate passed or not, what deviated, what deferred.)*
+**Gate: passed, with two noted deviations (below).**
+
+1. `scripts/verify_band.py` and `scripts/verify_engine.py` pass. All numeric
+   output is unchanged from `baseline_band.txt`/`baseline_engine.txt`; the
+   only text difference is the intentionally-renamed trigger string in
+   check `a` (`'delta band'` -> `'long-short band'`).
+2. Headless boot confirms numerically identical UI output: main page, Trade
+   Strategy, and Pair Leaderboard all HTTP 200, no tracebacks.
+3. `grep -rn "delta_band\|short_band" src/ scripts/ docs/` is **not** empty
+   as literally run -- `long_short_band` contains `short_band` as a
+   substring, so every remaining hit is inside a correctly-renamed
+   identifier. Confirmed via an exclusion-diff that zero old-name
+   occurrences remain. The grep in this gate item should read
+   `\bdelta_band\b|\bshort_band\b` (or similar) if re-run in a future spec.
+4. Trade Strategy and Pair Leaderboard pages render without error (verified
+   above).
+5. No file claims something contradicted by `docs/STRATEGY_SPEC.md`, per the
+   fixes in items 2-6.
+
+**Deviations:**
+- **Item 6:** in addition to `docs/AUTOMATION.md`, `ROADMAP.md` was also
+  edited. The spec assumed both files still said $100k; `ROADMAP.md` had
+  already been updated to "$110k NLV" before this session but was missing
+  the "plus options approval" clause. Standardized the full phrase there too
+  under the "everywhere it appears" instruction -- not a new number, just a
+  wording gap in an already-partially-fixed file.
+- **Item 7:** `SCRATCHPAD.md` is ~10.4KB, not under the 5KB target in the
+  "Done when" line. The three kept 2026-07-05 entries alone are 8.3KB. Asked
+  the user how to resolve the conflict between "keep the last three
+  sessions" and "under 5KB"; user chose to keep all three entries verbatim
+  and drop the 5KB target, since summarizing/trimming them would violate the
+  "preserve the text verbatim, do not summarize or edit entries" instruction
+  in the same item.
+
+**Deferred:** nothing from this spec's numbered items. `specs/spec_001.md`
+line 121's own `$100k` mention (in this file's own task-description prose)
+was left unedited, since specs are not rewritten mid-session.
+`ROADMAP.md` still references `docs/SPEC.md` (should be
+`docs/STRATEGY_SPEC.md`) in three places -- noticed but out of scope, since
+it isn't a numbered item in this spec; flagged as a candidate for a future
+spec.
