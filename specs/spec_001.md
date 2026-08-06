@@ -1,13 +1,13 @@
-# Spec 001 -- Reconcile the repo with SPEC.md
+# Spec 001 -- Reconcile the repo with STRATEGY_SPEC.md
 
 **Phase:** 0
-**Depends on:** `docs/SPEC.md` being in the repo
+**Depends on:** `docs/STRATEGY_SPEC.md` (in repo)
 **Estimated:** one session
 
 ## Why
 
-`docs/SPEC.md` is now the source of truth. Several files contradict it, and
-several more make claims that were true when written and are no longer. This
+`docs/STRATEGY_SPEC.md` is now the source of truth. Several files contradict it,
+and several more make claims that were true when written and are no longer. This
 session fixes only that. No behavior changes, no new features.
 
 ## Out of scope (do not build)
@@ -28,8 +28,8 @@ Files with occurrences: `src/band.py`, `src/app.py`, `src/pages/Pair_Analysis.py
 `scripts/verify_band.py`, `docs/GLOSSARY.md`, `docs/strategy.md`.
 
 **Careful:** do not blanket-replace on the substring `short`. `short_size`,
-`short_notional`, `short_pnl`, `short_leg`, and `turnover_lev` are unrelated and
-must not change. Only the two parameter names above, plus:
+`short_notional`, `short_pnl`, and `short_leg` are unrelated and must not change.
+Only the two parameter names above, plus:
 
 - The `trigger` strings in the trades DataFrame: `"delta band"` ->
   `"long-short band"`, `"short band"` -> `"foil decay band"`.
@@ -44,21 +44,44 @@ updated in the same commit.
 nothing, and `scripts/verify_band.py` passes with identical numeric output to
 before the rename.
 
-## 2. Fix stale claims in CLAUDE.md
+## 2. CLAUDE.md -- fix stale claims and add the working agreement
+
+Stale claims to fix:
 
 - File map calls `engine.py` a "borrow stub". It is a real accrual. The Scope
   Cuts section in the same file already says so -- make the file map agree.
 - The Pairing section says the margin-multiplier and live-flag rework is "in
   progress". It shipped (`dee4c5e`, `180aed8`, `25b65d6`). Update the field list
-  to include `live` and `margin_multiplier` and drop the "rework in progress" line.
+  to include `live` and `margin_multiplier`, drop the "rework in progress" line.
 - It links to `GLOSSARY.md` at the repo root. The file is `docs/GLOSSARY.md`.
-- The file map omits `scripts/`, `docs/`, and `src/pages/`. Add them.
-- Add a line pointing at `docs/SPEC.md` as the source of truth, and at `specs/`
-  for per-session specs.
+- The file map omits `scripts/`, `docs/`, `specs/`, and `src/pages/`. Add them.
 - The strategy section's three-sentence definition stays, but the band names in
   it change per item 1.
 
-**Done when:** every factual claim in `CLAUDE.md` is true of the current repo.
+Then replace the scattered workflow bullets with one **Working agreement**
+section. It should be shorter than what it replaces -- the specs now carry what
+CLAUDE.md was trying to say generically:
+
+- `docs/STRATEGY_SPEC.md` -- what the strategy is. Source of truth. If code
+  disagrees with it, the code is the bug.
+- `ROADMAP.md` -- what gets built and in what order.
+- `specs/spec_NNN.md` -- the active session's scope and gate.
+- `SCRATCHPAD.md` -- what actually happened, appended after each session.
+
+The scope gate tightens: it was "if a task isn't on the ROADMAP, ask before
+building." It is now **"if it isn't in the active spec, ask before building."**
+ROADMAP says what is eventually in scope; the spec says what is in scope *now*.
+
+Also state the two conventions specs introduce:
+
+- Each spec gets a **Result** section appended after the session: gate passed or
+  not, what deviated, what got deferred. The spec is then a self-contained
+  record and needs no scratchpad cross-reference.
+- Specs are written before the work and not rewritten during it. If scope needs
+  to change mid-session, stop and amend deliberately.
+
+**Done when:** every factual claim in `CLAUDE.md` is true of the current repo,
+and the workflow section is shorter than the bullets it replaced.
 
 ## 3. Fix stale claims in docs/strategy.md
 
@@ -71,7 +94,7 @@ Keep it plain-English -- it is not a spec and should not become one.
 - No mention of margin cushion or capital utilization despite both being sidebar
   controls. Add a short paragraph.
 - Band names per item 1.
-- Add a link to `docs/SPEC.md` for the full mechanics.
+- Add a link to `docs/STRATEGY_SPEC.md` for the full mechanics.
 
 **Done when:** a user reading the explainer page and then moving the sidebar
 sliders finds nothing surprising.
@@ -91,7 +114,7 @@ backtest trade count and turnover are a lower bound:
 - in the `run_band_backtest` docstring, and
 - next to the trades/turnover metrics in the UI (help text is fine).
 
-Do not change any logic. This is a disclosure, not a fix -- the fix is spec 003.
+Do not change any logic. This is a disclosure, not a fix.
 
 ## 6. Standardize the Portfolio Margin threshold
 
@@ -104,6 +127,27 @@ now sits awkwardly next to a 15-minute poll interval. Keep the conclusion but
 distinguish the two clearly -- quote *delay* and poll *interval* are different
 things and the current wording blurs them.
 
+## 7. Restructure SCRATCHPAD.md
+
+Currently 27KB and twelve session entries, newest 2026-07-05. CLAUDE.md
+instructs reading it every session, so it is the single largest thing loaded into
+context, and most of its content is now either in the code, in
+`docs/STRATEGY_SPEC.md`, or in git history.
+
+- Create `docs/history/` and move everything before 2026-07-05 into
+  `docs/history/scratchpad-2026-06.md`. Use `git mv` semantics -- preserve the
+  text verbatim, do not summarize or edit entries.
+- Keep the three most recent entries in `SCRATCHPAD.md`.
+- Replace the session template with the shorter post-specs format: date, spec
+  number, what shipped, what surprised us, what's next. Design rationale no
+  longer belongs here -- it goes in the spec, before the work.
+- Add a one-line retention note at the top: keep the last three sessions, archive
+  the rest to `docs/history/`.
+- Log this session as the first entry in the new format.
+
+**Done when:** `SCRATCHPAD.md` is under 5KB, the archived entries are byte-identical
+to their originals, and nothing links to a moved entry.
+
 ---
 
 ## Session gate
@@ -115,7 +159,14 @@ All of the following must hold before committing:
    before this session. This is a rename-and-document session; if a number
    moved, find out why before proceeding.
 3. `grep -rn "delta_band\|short_band" src/ scripts/ docs/` is empty.
-4. No file claims something contradicted by `docs/SPEC.md`.
+4. The Trade Strategy and Pair Leaderboard pages both render without error.
+5. No file claims something contradicted by `docs/STRATEGY_SPEC.md`.
 
 Commit as separate commits per numbered item, imperative lowercase with a scope
 prefix. Do not commit until I have reviewed the diff.
+
+---
+
+## Result
+
+*(Fill in after the session: gate passed or not, what deviated, what deferred.)*

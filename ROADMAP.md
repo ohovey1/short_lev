@@ -19,7 +19,7 @@ Scope gate: if a task isn't here, ask before building.
 
 ## Phase 0 -- reconcile with the spec
 
-Spec: `specs/001-reconcile.md`. No new features. The repo currently contradicts
+Spec: `specs/spec_001.md`. No new features. The repo currently contradicts
 `docs/SPEC.md` in several places, and shipping on top of that just moves the
 contradiction downstream.
 
