@@ -1,10 +1,11 @@
-"""Layer 4: Streamlit UI for the overlapping-tranche backtest.
+"""Layer 4: Streamlit UI for the band-rebalanced and tranche-ladder backtests.
 
 Run from the repo root:
     streamlit run src/app.py
 
-Presentation only -- every number comes from backtest.run_backtest. No P&L
-math here.
+Presentation only -- most numbers come from band.run_band_backtest (the
+default strategy); the ladder alternative comes from backtest.run_backtest.
+No P&L math here.
 """
 
 import os
@@ -98,11 +99,11 @@ def run(pair_key, hold_days, base_capital, lookback_days, borrow_rate_annual):
 
 
 @st.cache_data
-def run_band(pair_key, base_capital, delta_band, short_band, capital_utilization,
+def run_band(pair_key, base_capital, long_short_band, foil_decay_band, capital_utilization,
              lookback_days, borrow_rate_annual):
     """Cached wrapper for the band strategy, mirroring run()."""
     return band.run_band_backtest(
-        pair_key, base_capital, delta_band=delta_band, short_band=short_band,
+        pair_key, base_capital, long_short_band=long_short_band, foil_decay_band=foil_decay_band,
         capital_utilization=capital_utilization, lookback_days=lookback_days,
         borrow_rate_annual=borrow_rate_annual,
     )
@@ -158,12 +159,12 @@ if strategy == "Ladder":
         value=min(5, max(2, lookback // 2)),
     )
 else:
-    delta_band = st.sidebar.slider(
-        "Delta band", min_value=0.05, max_value=0.30, value=0.10, step=0.01,
+    long_short_band = st.sidebar.slider(
+        "Long-Short Band", min_value=0.05, max_value=0.30, value=0.10, step=0.01,
         help="Re-neutralize via the long leg when |net delta| exceeds this fraction of target.",
     )
-    short_band = st.sidebar.slider(
-        "Short band", min_value=0.05, max_value=0.30, value=0.10, step=0.01,
+    foil_decay_band = st.sidebar.slider(
+        "Foil Decay Band", min_value=0.05, max_value=0.30, value=0.10, step=0.01,
         help="Reset the short to target when its notional drifts this fraction from target.",
     )
     capital_utilization = st.sidebar.slider(
@@ -208,7 +209,7 @@ else:
         "Between trades the hedge is frozen; a trade fires only when the net delta "
         "or the short notional drifts past its band."
     )
-    result = run_band(pair_key, base_capital, delta_band, short_band, capital_utilization,
+    result = run_band(pair_key, base_capital, long_short_band, foil_decay_band, capital_utilization,
                       lookback, borrow_rate_annual)
 st.warning(DISCLAIMER)
 
@@ -265,10 +266,18 @@ else:
     c8.metric("Borrow rate (annual)", f"{borrow_rate_annual:.2%} ({borrow_source})")
     c9.metric("Min margin cushion", f"${result['min_margin_cushion']:,.2f}")
     c10, c11, c12 = st.columns(3)
-    c10.metric("Trades", f"{result['n_trades']}")
+    c10.metric(
+        "Trades", f"{result['n_trades']}",
+        help="Backtest checks bands once per day on the close; live polling "
+             "every 15 minutes will trip bands more often. This count is a "
+             "lower bound on live trade frequency.",
+    )
     c11.metric(
         "Total turnover",
         f"${result['turnover_lev'] + result['turnover_und']:,.2f}",
+        help="Backtest checks bands once per day on the close; live polling "
+             "every 15 minutes will trip bands more often. This total is a "
+             "lower bound on live turnover.",
     )
     c12.metric("Breakeven borrow", f"{result['breakeven_borrow']:.2%}")
 
