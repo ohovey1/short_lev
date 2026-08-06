@@ -40,7 +40,7 @@ Only the two parameter names above, plus:
 Keyword arguments change, so every call site of `run_band_backtest` must be
 updated in the same commit.
 
-**Done when:** `grep -rn "delta_band\|short_band" src/ scripts/ docs/` returns
+**Done when:** `grep -rEn "\bdelta_band\b|\bshort_band\b" src/ scripts/ docs/` returns
 nothing, and `scripts/verify_band.py` passes with identical numeric output to
 before the rename.
 
@@ -158,7 +158,7 @@ All of the following must hold before committing:
 2. Running any pair through the UI produces numerically identical output to
    before this session. This is a rename-and-document session; if a number
    moved, find out why before proceeding.
-3. `grep -rn "delta_band\|short_band" src/ scripts/ docs/` is empty.
+3. `grep -rEn "\bdelta_band\b|\bshort_band\b" src/ scripts/ docs/` is empty.
 4. The Trade Strategy and Pair Leaderboard pages both render without error.
 5. No file claims something contradicted by `docs/STRATEGY_SPEC.md`.
 
@@ -177,12 +177,15 @@ prefix. Do not commit until I have reviewed the diff.
    check `a` (`'delta band'` -> `'long-short band'`).
 2. Headless boot confirms numerically identical UI output: main page, Trade
    Strategy, and Pair Leaderboard all HTTP 200, no tracebacks.
-3. `grep -rn "delta_band\|short_band" src/ scripts/ docs/` is **not** empty
-   as literally run -- `long_short_band` contains `short_band` as a
-   substring, so every remaining hit is inside a correctly-renamed
-   identifier. Confirmed via an exclusion-diff that zero old-name
-   occurrences remain. The grep in this gate item should read
-   `\bdelta_band\b|\bshort_band\b` (or similar) if re-run in a future spec.
+3. `grep -rn "delta_band\|short_band" src/ scripts/ docs/` was **not** empty
+   as originally written -- `long_short_band` contains `short_band` as a
+   substring, so every hit was inside a correctly-renamed identifier.
+   Confirmed via an exclusion-diff at the time that zero old-name
+   occurrences remained. **Post-session correction:** this item's gate text
+   (both the item-1 "Done when" and the Session gate item 3 above) was
+   updated after the fact to `grep -rEn "\bdelta_band\b|\bshort_band\b"
+   src/ scripts/ docs/`, which correctly returns empty against the renamed
+   codebase. Fixed in a follow-up cleanup session, not the original one.
 4. Trade Strategy and Pair Leaderboard pages render without error (verified
    above).
 5. No file claims something contradicted by `docs/STRATEGY_SPEC.md`, per the
