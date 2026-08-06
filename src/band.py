@@ -4,17 +4,17 @@ One continuous position: short ~target notional of the LETF, long ~L*target of
 the underlying. Between trades the hedge is frozen (a "segment"); the engine
 marks each segment from its entry prices. Trades happen only when a band trips:
 
-  - |short notional - target| > short_band * target
+  - |short notional - target| > foil_decay_band * target
                                            -> reset short to target, re-neutralize
-  - else |net delta| > delta_band * target -> re-neutralize via the LONG leg only
+  - else |net delta| > long_short_band * target -> re-neutralize via the LONG leg only
 
 All P&L math goes through engine.position_pnl / engine.borrow_cost, same as
 backtest.py. This file holds only state (the current segment) and the band
 policy.
 
 Also tracks margin cushion (equity - margin_required) per day as a pure
-observation: it does not feed back into the short_band/delta_band trigger
-logic above, it just reports whether a real account backing this position
+observation: it does not feed back into the foil_decay_band/long_short_band
+trigger logic above, it just reports whether a real account backing this position
 would have enough equity to meet the margin the short leg's current size
 requires. capital_utilization (default 0.75) leaves a deliberate slice of
 base_capital undeployed as headroom against that cushion going negative --
@@ -28,7 +28,7 @@ import data
 import engine
 
 
-def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
+def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_band=0.10,
                       capital_utilization=0.75, price_field="close",
                       lookback_days=None, borrow_rate_annual=None):
     """Run the band-rebalanced backtest for one pair.
@@ -46,6 +46,10 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
     breakeven_borrow) and margin cushion stats (margin_cushion,
     min_margin_cushion, margin_breached, margin_breach_date) -- observation
     only, computed from the same short_notional the band checks already use.
+
+    Bands are evaluated once per day on the close; live polling (target: every
+    15 minutes) will trip bands strictly more often. n_trades and turnover
+    here are therefore a lower bound on live behavior.
     """
     pair = config.PAIRS[pair_key]
     L = pair["leverage"]
@@ -88,8 +92,8 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
         long_notional = long_size * (und_now / und_e)
         net_delta = long_notional - L * short_notional
 
-        # Band checks (short band first: its reset also re-neutralizes delta).
-        if abs(short_notional - target) > short_band * target:
+        # Band checks (foil decay band first: its reset also re-neutralizes delta).
+        if abs(short_notional - target) > foil_decay_band * target:
             r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
             realized += r["net"]
             traded_lev = abs(target - short_notional)
@@ -97,7 +101,7 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
             turnover_lev += traded_lev
             turnover_und += traded_und
             trades.append({
-                "open_date": seg_date, "close_date": date, "trigger": "short band",
+                "open_date": seg_date, "close_date": date, "trigger": "foil decay band",
                 "lev_entry": lev_e, "lev_exit": lev_now,
                 "und_entry": und_e, "und_exit": und_now,
                 "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
@@ -109,13 +113,13 @@ def run_band_backtest(pair_key, base_capital, delta_band=0.10, short_band=0.10,
             short_notional, long_notional = target, L * target
             seg_date = date
             n_trades += 1
-        elif abs(net_delta) > delta_band * target:
+        elif abs(net_delta) > long_short_band * target:
             r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
             realized += r["net"]
             traded_und = abs(net_delta)             # long leg only
             turnover_und += traded_und
             trades.append({
-                "open_date": seg_date, "close_date": date, "trigger": "delta band",
+                "open_date": seg_date, "close_date": date, "trigger": "long-short band",
                 "lev_entry": lev_e, "lev_exit": lev_now,
                 "und_entry": und_e, "und_exit": und_now,
                 "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
