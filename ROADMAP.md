@@ -2,7 +2,7 @@
 
 Scope gate: if a task isn't here, ask before building.
 
-`docs/SPEC.md` is the source of truth for the strategy itself. This file tracks
+`docs/STRATEGY_SPEC.md` is the source of truth for the strategy itself. This file tracks
 *what gets built and in what order*. Per-session detail lives in `specs/`.
 
 ## Shipped
@@ -20,7 +20,7 @@ Scope gate: if a task isn't here, ask before building.
 ## Phase 0 -- reconcile with the spec
 
 Spec: `specs/spec_001.md`. No new features. The repo currently contradicts
-`docs/SPEC.md` in several places, and shipping on top of that just moves the
+`docs/STRATEGY_SPEC.md` in several places, and shipping on top of that just moves the
 contradiction downstream.
 
 - [ ] Rename bands to spec terminology (`delta_band` -> `long_short_band`,
@@ -29,9 +29,9 @@ contradiction downstream.
 - [ ] Record the daily-close check-cadence assumption where the numbers are read.
 - [ ] Standardize the Portfolio Margin threshold on $110,000 NLV plus options approval.
 
-**Done when:** no file in the repo contradicts `docs/SPEC.md`, and
+**Done when:** no file in the repo contradicts `docs/STRATEGY_SPEC.md`, and
 `scripts/verify_band.py` passes unchanged in behavior.
-**Success looks like:** a fresh reader can go from `CLAUDE.md` to `SPEC.md` to
+**Success looks like:** a fresh reader can go from `CLAUDE.md` to `STRATEGY_SPEC.md` to
 the code without hitting a single statement that turns out to be false.
 
 ---
