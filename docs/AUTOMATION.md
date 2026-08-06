@@ -22,19 +22,26 @@ Polygon stays a backtesting/historical-validation tool only — free tier is rat
 Live band checks should run against **IBKR quotes**, once connected via `ib_async` for
 execution anyway. Reasoning: using the same venue for the trigger check and the fill
 eliminates basis risk between "the price that told us to trade" and "the price we
-actually get." Delayed (15-min) IBKR quotes are acceptable for now — band strategy
-operates on daily-ish thresholds, not intraday ticks, so latency is not a concern
-initially. Revisit if execution timing tightens.
+actually get."
+
+Two different 15-minute numbers are in play here and should not be conflated:
+**quote delay** (IBKR's free market-data feed lags real-time by up to 15 minutes) and
+**poll interval** (`docs/STRATEGY_SPEC.md`'s target cadence for checking the bands,
+also 15 minutes). Delayed quotes are acceptable for now because the band strategy's
+thresholds are wide (10% moves), not because the poll interval happens to share the
+same number — a stale quote inside a 15-minute-old snapshot is a small fraction of
+the band width. Revisit quote delay if execution timing tightens; the poll interval
+is a separate knob, tracked as its own modeling assumption in the strategy spec.
 
 Borrow-rate data is unaffected — already IBKR-sourced.
 
 ## Account requirements
 
 - **Margin account** is required to short at all — cash accounts can't do it.
-- **Portfolio Margin** ($100k minimum equity) is the capital-efficient target given the
-  hedged long/short structure — risk-based margining recognizes the offset between
-  legs, versus Reg T pricing legs closer to independently. Below $100k, Reg T works as
-  a starting point, just less capital-efficient.
+- **Portfolio Margin** ($110,000 NLV plus options approval) is the capital-efficient
+  target given the hedged long/short structure — risk-based margining recognizes the
+  offset between legs, versus Reg T pricing legs closer to independently. Below that
+  threshold, Reg T works as a starting point, just less capital-efficient.
 - **Reg SHO locates** — need actual borrow availability before shorting. Already
   tracked via `get_borrow_rates()`'s `available` field; live bot needs to treat
   zero/unavailable as a hard block, not just a rate input.
@@ -87,5 +94,6 @@ manual intervention needed to recover from a disconnect or restart.
 
 - Notification channel: Slack vs. email — not yet chosen.
 - VPS vs. always-on local machine for Phase 3 — not yet chosen.
-- Timing of Portfolio Margin upgrade relative to $100k threshold — depends on capital
-  available at automation time, not a blocking decision now.
+- Timing of Portfolio Margin upgrade relative to the $110,000 NLV plus options
+  approval threshold — depends on capital available at automation time, not a
+  blocking decision now.

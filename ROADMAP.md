@@ -27,7 +27,7 @@ contradiction downstream.
       `short_band` -> `foil_decay_band`).
 - [ ] Fix stale claims in `CLAUDE.md`, `docs/strategy.md`, `app.py` docstring.
 - [ ] Record the daily-close check-cadence assumption where the numbers are read.
-- [ ] Standardize the Portfolio Margin threshold on $110k NLV.
+- [ ] Standardize the Portfolio Margin threshold on $110,000 NLV plus options approval.
 
 **Done when:** no file in the repo contradicts `docs/SPEC.md`, and
 `scripts/verify_band.py` passes unchanged in behavior.
@@ -134,9 +134,9 @@ unvalidated against adverse regimes.
 - **IBKR 2FA / unattended login policy** -- blocking for Phase 3. IBC automates
   credential entry, but mobile-push 2FA may have no clean unattended bypass on
   retail accounts. Needs direct confirmation before a VPS host is viable.
-- **Portfolio Margin timing** relative to the $110k NLV threshold. Note that PM's
-  correlation offsets are for broad-based index products -- single-stock pairs
-  may see little benefit even above the threshold.
+- **Portfolio Margin timing** relative to the $110,000 NLV plus options approval
+  threshold. Note that PM's correlation offsets are for broad-based index products
+  -- single-stock pairs may see little benefit even above the threshold.
 - **Auxiliary collateral sleeve** (BRK, GLD) to support the margin cushion.
   Scope-cut for now; changes the margin model materially.
 - **SCRATCHPAD retention** -- currently unbounded at 27KB and read every session.
