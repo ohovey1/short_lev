@@ -61,7 +61,7 @@ def connect():
     client_id = int(os.environ.get("IB_CLIENT_ID", DEFAULT_CLIENT_ID))
 
     ib = IB()
-    ib.connect(host, port, clientId=client_id)
+    ib.connect(host, port, clientId=client_id, readonly=True)
 
     accounts = ib.managedAccounts()
     log.info(
