@@ -42,6 +42,18 @@ Borrow accrues daily on whatever the short notional currently is. The band width
 are the two sidebar sliders: wider bands mean fewer trades (less turnover) but a
 sloppier hedge.
 
+**Two closing rules run ahead of the bands**, both measured on account equity
+(base capital plus cumulative P&L), checked before any action that day:
+
+- **Drawdown stop:** if account equity falls 10% below its running peak, both legs
+  close and the run stays flat to the end of the window. Terminal -- there is no
+  re-entry.
+- **Margin de-risk:** if the margin cushion goes negative, both legs reset to a
+  target recomputed from current equity. A partial reset, not a close, and `target`
+  ratchets **down only** -- it never grows back as equity recovers.
+
+At most one of these -- or one band -- fires on any given day.
+
 **Margin multiplier and capital utilization.** Shorting a leveraged ETF and holding
 the offsetting long both require margin collateral, and the two legs aren't netted
 below Portfolio Margin thresholds -- `margin_multiplier` is a fixed, per-pair number
@@ -51,7 +63,9 @@ the fraction of base capital actually deployed as margin; the rest is deliberate
 slack, kept as headroom against a margin call as the position drifts. Lower
 utilization means a smaller position and more cushion; 1.0 uses all of base capital
 with no cushion -- the "Min margin cushion" metric below shows how close the run came
-to breaching.
+to breaching. At 1.0 the de-risk rule resets to a cushion of exactly zero, so the
+day's borrow tips it straight back under and it re-fires daily; that setting is a
+backward-compatibility knob, not a sensible live configuration.
 
 Full mechanics, the closing rules, and a worked numeric example:
 [`docs/STRATEGY_SPEC.md`](./STRATEGY_SPEC.md).
