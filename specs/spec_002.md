@@ -161,5 +161,100 @@ not commit until I have reviewed the diff.
 
 ## Result
 
-*(Fill in after the session: gate passed or not, what deviated, what deferred.
-Gate 6's ranking comparison goes here.)*
+**All six gates pass.** Implemented across items 1-7 as specced; no scope added.
+
+### Gates
+
+1. **Drawdown stop, hand-checked** -- PASS (`verify_band.py` check h). Fabricated
+   4-day TQQQ path, `capital_utilization=1.0`, bands disabled, borrow 0. The LETF
+   rises 17% on d1 against a flat underlying, so the frozen segment marks
+   `-606.060606 x 0.17 = -103.030303` and account equity is 896.969697 against a
+   peak of 1000 -- below the 900.000000 threshold, so the stop fires on d1 exactly.
+   Both leg sizes are zero afterward, the curve is flat to the end, and the cushion
+   is never negative post-stop.
+2. **De-risk, hand-checked** -- PASS (check i). Fabricated path, `cu=0.75`. On the
+   trip day account equity is 818.181818 against margin required 1050.000000;
+   `target_new = (818.181818 x 0.75) / 1.65 = 371.900826`, matching the
+   hand-derived figure, and cushion that day is exactly
+   `account_equity x (1 - 0.75) = 204.545455`.
+3. **Regression** -- PASS, and verified two ways. With `drawdown_stop=None` and
+   `margin_derisk=False`: (a) checks a-g reproduce `baseline_002.txt` as exact
+   text, and (b) a SHA-256 over every equity-curve and margin-cushion value plus
+   trade counts, turnover, borrow, and returns -- 13 pairs x 2 utilizations,
+   ~13,000 floats hashed by raw hex -- is identical to pre-spec-002 `HEAD`
+   (`28e5fdfe...a2bc5ef5`). The printed output rounds at ~6 decimals, so the
+   bitwise digest is the load-bearing check: the reordering is bit-for-bit
+   neutral, not merely close.
+4. **Property** -- PASS (check j). No day has a negative cushion following a
+   de-risk on that day, across all 13 pairs. Run at `capital_utilization=0.90`,
+   not 1.0 -- see the deviation note below.
+5. **Sanity** -- PASS (check k). Max drawdown on account equity across all 13
+   pairs at defaults ranges -0.29% to -1.77%, far inside the 10% stop. Nothing
+   approaches the threshold, so the stop has no opportunity to overshoot.
+6. **Ranking comparison** -- reported below.
+
+### Gate 6: all 13 pairs at defaults, pre- vs post-spec-002
+
+| Rank | Pair | Pre % | Post % | Stopped | De-risks | Rank move |
+|---:|---|---:|---:|---|---:|---:|
+| 1 | CONL | 13.34 | 13.20 | No | 3 | 0 |
+| 2 | TQQQ | 10.24 | 10.24 | No | 0 | 0 |
+| 3 | TSLL | 10.13 | 10.12 | No | 3 | 0 |
+| 4 | FAS | 8.70 | 8.70 | No | 0 | 0 |
+| 5 | SOXL | 8.33 | 8.33 | No | 1 | 0 |
+| 6 | TNA | 8.16 | 8.16 | No | 0 | 0 |
+| 7 | UPRO | 7.77 | 7.77 | No | 0 | 0 |
+| 8 | UDOW | 6.49 | 6.49 | No | 0 | 0 |
+| 9 | QLD | 6.11 | 6.11 | No | 0 | 0 |
+| 10 | NVDL | 5.85 | 5.56 | No | 1 | 0 |
+| 11 | SSO | 4.86 | 4.86 | No | 0 | 0 |
+| 12 | ERX | 1.22 | 1.22 | No | 0 | 0 |
+| 13 | TMF | 0.44 | 0.44 | No | 0 | 0 |
+
+**No pair stopped, and the ranking is unchanged.** Eight de-risk events fire
+across four pairs (CONL 3, TSLL 3, SOXL 1, NVDL 1), costing at most 29bp (NVDL
+5.85% -> 5.56%).
+
+This is a weaker result than the spec anticipated ("expect the numbers to get
+worse... some pairs will rank differently"). The reason is that on this cached
+window the strategy is nowhere near either trigger at defaults: worst
+account-equity drawdown is ERX at -1.77% against a 10% stop, and
+`capital_utilization=0.75` already keeps end-of-day cushion positive on every
+pair-day (check g). The de-risks that do fire come from days where the
+*pre-borrow* cushion dips negative even though the recorded end-of-day cushion
+does not.
+
+**The ranking being stable is not evidence the rules are inert.** It is evidence
+this window contains no stress event severe enough to trigger them. The
+hand-checked gates 1-2 are what demonstrate the rules work; a window containing a
+genuine drawdown would be needed to see them reshape the leaderboard.
+
+### Deviations
+
+- **Gate 4 runs at `capital_utilization=0.90`, not the 0.75 default or 1.0.**
+  At 0.75 nothing de-risks on this data, so the property would pass vacuously. At
+  1.0 it is degenerate in the other direction: the spec's own formula puts the
+  post-reset cushion at `equity x (1 - 1.0) = 0` exactly, so the day's borrow tips
+  it fractionally negative (~ -0.17 on a $6,060 short) and de-risk re-fires every
+  day -- 108 events on TQQQ, with `target` never ratcheting because equity is
+  essentially unchanged each time. That contradicts the spec's "cannot thrash
+  across consecutive days" only at `cu=1.0`, and it is a property of full
+  utilization, not a defect in the rule. 0.90 exercises de-risk genuinely (1-28
+  events per pair) with real headroom after each reset.
+- **Four pre-existing checks (b, c, f, g) now pass `drawdown_stop=None,
+  margin_derisk=False`.** All four run at `cu=1.0` and assert pre-spec-002
+  properties -- b's zero-trade premise, c's apples-to-apples comparison against
+  the ladder (which has no closing rules), f's explicit "matches pre-cushion-knob
+  behavior" claim, and g's isolation of the utilization knob. Without the knobs
+  they would measure the new rules instead of what they were written to test; b
+  failed outright (22 de-risk trades against an expected zero) before the fix.
+- **`account_equity` excludes the current day's borrow**, per spec item 2's
+  formula read literally and in position (today's accrual is step 5). The
+  recorded `margin_cushion` series is post-borrow, so the trigger and the
+  reported series differ by one day's accrual. This is why an isolated day can
+  show a negative recorded cushion without a de-risk having fired on it.
+
+### Deferred
+
+Nothing from this spec. Out-of-scope items (re-entry, target ratchet-up, kill
+switch, intraday cadence, band grid search) were not built, as specced.
