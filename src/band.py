@@ -9,8 +9,11 @@ marks each segment from its entry prices. Trades happen only when a band trips:
   - else |net delta| > long_short_band * target -> re-neutralize via the LONG leg only
 
 All P&L math goes through engine.position_pnl / engine.borrow_cost, same as
-backtest.py. This file holds only state (the current segment) and the band
-policy.
+backtest.py. The trip conditions themselves live in decision.evaluate(), which
+is pure and point-in-time; this file owns iteration and accounting only -- the
+bar loop, segment state, borrow accrual, and the trade log. It re-derives no
+trigger condition, so the backtest and the live monitor share one definition of
+a band breach.
 
 Two closing rules run ahead of the bands, checked in this order:
 
@@ -30,6 +33,7 @@ import pandas as pd
 
 import config
 import data
+import decision
 import engine
 
 
@@ -132,7 +136,6 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
         # --- 1. Mark the position, before any action ------------------------
         short_notional = short_size * (lev_now / lev_e)
         long_notional = long_size * (und_now / und_e)
-        net_delta = long_notional - L * short_notional
 
         # Account equity BEFORE any action today: base capital plus realized P&L
         # plus the open segment's mark, less borrow accrued through YESTERDAY
@@ -147,113 +150,67 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
         mark = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
         account_equity = base_capital + realized + mark["net"] - borrow_paid
 
-        # --- 2-4. Triggers, highest urgency first ---------------------------
-        # One chain, so at most one of these fires on a given day. Order is
-        # load-bearing: drawdown stop (terminal) beats margin de-risk (its reset
-        # also re-neutralizes delta, making the bands moot that day), which beats
-        # the bands. Steps 2 and 3 land in the next two spec items; the band
-        # checks below are step 4 and are unchanged.
-        #
+        # --- 2-4. Decide ----------------------------------------------------
+        # The trip conditions live in decision.evaluate(); this loop re-derives
+        # none of them. Priority (drawdown stop > margin de-risk > foil decay >
+        # long-short) is enforced there, and at most one trigger fires.
         peak_equity = max(peak_equity, account_equity)
 
-        if drawdown_stop is not None and account_equity < peak_equity * (1 - drawdown_stop):
-            # Terminal: realize the open segment, close both legs, stay flat.
-            r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
-            realized += r["net"]
-            traded_lev = short_notional
-            traded_und = long_notional
-            turnover_lev += traded_lev
-            turnover_und += traded_und
-            trades.append({
-                "open_date": seg_date, "close_date": date, "trigger": "drawdown stop",
-                "lev_entry": lev_e, "lev_exit": lev_now,
-                "und_entry": und_e, "und_exit": und_now,
-                "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
-                "total_pnl": r["net"],
-                "traded_lev": traded_lev, "traded_und": traded_und,
-            })
-            short_size, long_size = 0.0, 0.0
-            short_notional, long_notional = 0.0, 0.0
-            seg_date = date
-            n_trades += 1
-            stopped = True
-            stop_date = date
-        elif margin_derisk and account_equity < pair["margin_multiplier"] * short_notional:
-            # Cushion is negative (equity < margin required). Recompute target
-            # from CURRENT equity and reset both legs to it -- a partial reset,
-            # not a close. Ranks above the bands: being under-margined is more
-            # urgent than being off-hedge, and this reset re-neutralizes delta
-            # anyway, so the band checks would be moot today.
-            r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
-            realized += r["net"]
+        d = decision.evaluate(
+            decision.PositionState(
+                short_notional=short_notional,
+                long_notional=long_notional,
+                leverage=L,
+                target=target,
+                account_equity=account_equity,
+                peak_equity=peak_equity,
+                margin_required=pair["margin_multiplier"] * short_notional,
+                margin_multiplier=pair["margin_multiplier"],
+            ),
+            decision.BandParams(
+                long_short_band=long_short_band,
+                foil_decay_band=foil_decay_band,
+                capital_utilization=capital_utilization,
+                drawdown_stop=drawdown_stop,
+                margin_derisk=margin_derisk,
+            ),
+        )
 
-            if account_equity <= 0:
-                # Nothing left to margin. Close rather than resize; a target
-                # computed from non-positive equity is meaningless. In practice
-                # the drawdown stop fires long before this.
-                target_new = 0.0
-            else:
-                target_new = (account_equity * capital_utilization) / pair["margin_multiplier"]
+        if d.trigger is not None:
+            # Realize the open segment, then resize to the decided notionals.
+            # Both traded amounts are just the distance each leg moved, which
+            # covers every trigger: a stop closes to 0 (so it trades the full
+            # marked size), a reset trades to target, and the long-short band
+            # leaves the short untouched (so traded_lev is exactly 0.0).
+            r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
+            realized += r["net"]
+            traded_lev = abs(d.new_short_notional - short_notional)
+            traded_und = abs(d.new_long_notional - long_notional)
+            turnover_lev += traded_lev
+            turnover_und += traded_und
+            trades.append({
+                "open_date": seg_date, "close_date": date, "trigger": d.trigger,
+                "lev_entry": lev_e, "lev_exit": lev_now,
+                "und_entry": und_e, "und_exit": und_now,
+                "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
+                "total_pnl": r["net"],
+                "traded_lev": traded_lev, "traded_und": traded_und,
+            })
+            # A stop closes the legs and ends the run: it opens no new segment,
+            # so the entry prices stay where they were.
+            if not d.terminal:
+                lev_e, und_e = lev_now, und_now
+            short_size, long_size = d.new_short_notional, d.new_long_notional
+            short_notional, long_notional = d.new_short_notional, d.new_long_notional
+            seg_date = date
+            n_trades += 1
+            if d.trigger == "margin de-risk":
+                n_derisk += 1
+            if d.terminal:
+                stopped = True
+                stop_date = date
 
-            traded_lev = abs(target_new - short_notional)
-            traded_und = abs(L * target_new - long_notional)
-            turnover_lev += traded_lev
-            turnover_und += traded_und
-            trades.append({
-                "open_date": seg_date, "close_date": date, "trigger": "margin de-risk",
-                "lev_entry": lev_e, "lev_exit": lev_now,
-                "und_entry": und_e, "und_exit": und_now,
-                "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
-                "total_pnl": r["net"],
-                "traded_lev": traded_lev, "traded_und": traded_und,
-            })
-            lev_e, und_e = lev_now, und_now
-            short_size, long_size = target_new, L * target_new
-            short_notional, long_notional = target_new, L * target_new
-            seg_date = date
-            n_trades += 1
-            n_derisk += 1
-            target = min(target, target_new)  # ratchets DOWN only, never back up
-        # Foil decay band first: its reset also re-neutralizes delta.
-        elif abs(short_notional - target) > foil_decay_band * target:
-            r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
-            realized += r["net"]
-            traded_lev = abs(target - short_notional)
-            traded_und = abs(L * target - long_notional)
-            turnover_lev += traded_lev
-            turnover_und += traded_und
-            trades.append({
-                "open_date": seg_date, "close_date": date, "trigger": "foil decay band",
-                "lev_entry": lev_e, "lev_exit": lev_now,
-                "und_entry": und_e, "und_exit": und_now,
-                "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
-                "total_pnl": r["net"],
-                "traded_lev": traded_lev, "traded_und": traded_und,
-            })
-            lev_e, und_e = lev_now, und_now
-            short_size, long_size = target, L * target
-            short_notional, long_notional = target, L * target
-            seg_date = date
-            n_trades += 1
-        elif abs(net_delta) > long_short_band * target:
-            r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
-            realized += r["net"]
-            traded_und = abs(net_delta)             # long leg only
-            turnover_und += traded_und
-            trades.append({
-                "open_date": seg_date, "close_date": date, "trigger": "long-short band",
-                "lev_entry": lev_e, "lev_exit": lev_now,
-                "und_entry": und_e, "und_exit": und_now,
-                "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
-                "total_pnl": r["net"],
-                "traded_lev": 0.0, "traded_und": traded_und,
-            })
-            lev_e, und_e = lev_now, und_now
-            short_size = short_notional             # carry the short at its current value
-            long_size = L * short_notional
-            long_notional = long_size
-            seg_date = date
-            n_trades += 1
+        target = d.new_target  # ratchets DOWN only, never back up
 
         # --- 5. Accrue borrow on the POST-action short notional, then record --
         # Post-action is deliberate: a reset above already rewrote short_notional,
