@@ -29,6 +29,48 @@ long_leg = leverage x target
 regulatory-formula estimate, not a confirmed IBKR house number -- confirm via a
 TWS what-if order before sizing any live position.
 
+### Target derivation and `base_capital`
+
+`target` is the reference for three separate things, which is why getting it
+wrong is expensive and quiet:
+
+1. The foil decay band trips on `abs(short_notional - target)`.
+2. The long-short band threshold is `long_short_band x target`.
+3. On a foil decay trip, both legs reset **to** target.
+
+`target` is always **derived**, never observed. It comes from `base_capital` via
+the formula above, identically in the backtest and live. There is one formula.
+
+**`base_capital` is an allocation decision, not a market quantity.** It is the
+capital deliberately committed to this pair. It is configuration. It changes only
+when a human decides to run more or less size -- a deposit, a withdrawal, or a
+resizing decision -- and never in response to price, P&L, or account value.
+
+**`base_capital` is explicitly not NLV.** This question recurs, so the reasoning
+is recorded here rather than re-argued:
+
+- Deriving `target` from live account value makes it float with P&L. Drift is
+  then measured against a reference that drifts with it, so
+  `abs(short_notional - target)` never accumulates and **the foil decay band
+  silently never fires**. It looks like it is working.
+- The strategy's entire edge is the frozen hedge ratio. Any rule that resizes on
+  something other than a band breach introduces trades unrelated to the position
+  or the market.
+- `base_capital` and NLV answer different questions: what we decided to run,
+  versus what it is currently worth. Only the first should size the position.
+
+**Deposits and withdrawals are detected, not acted on.** New cash arriving is a
+reason to *consider* running more size, not an instruction to do so. Automated
+systems observing a cash movement must alert on the divergence between
+`base_capital` and NLV and take no sizing action. Raising `base_capital` is a
+human decision, and the resulting resize then flows through the normal band
+logic as an ordinary foil decay trip.
+
+**Divergence is a warning sign.** If `base_capital` materially exceeds NLV, the
+derived target is unachievable: the position will be oversized, cushion thin, and
+the margin de-risk rule will fire repeatedly against a reference that can never
+be met. Any system deriving a target must check for this and say so loudly.
+
 ### Position monitoring and rebalancing
 
 The position is polled on a fixed interval (target: every 15 minutes during
@@ -73,6 +115,17 @@ back up as equity recovers. That keeps the "target is fixed, not equity-scaled"
 principle intact in the normal case while still letting the position shrink
 under stress.
 
+This is the **one** case where `target` changes without a change to
+`base_capital`, and it is only valid in a system that actually executes the
+resize. A monitor that recommends but does not trade must not apply the ratchet:
+moving the reference for a trade that never happened corrupts every subsequent
+band reading.
+
+The rule assumes `capital_utilization < 1.0`. At exactly 1.0 the post-reset
+cushion is `equity x (1 - 1.0) = 0` by construction, so the next accrual
+re-trips it and de-risk fires every period without the target ever ratcheting.
+Benign at any realistic setting; noted because 1.0 is a valid input.
+
 Kill-switch reasons include stock splits, earnings, index reconstitution,
 borrow becoming unavailable or repriced, and market-wide dislocation. It is
 deliberately a human decision with no automated trigger.
@@ -83,6 +136,7 @@ deliberately a human decision with no automated trigger.
 
 | Parameter | Value | Notes |
 |---|---|---|
+| `base_capital` | per deployment | Allocation decision. Configuration, not derived. See section 1. |
 | `long_short_band` | 0.10 | To be optimized by grid search |
 | `foil_decay_band` | 0.10 | To be optimized by grid search |
 | `capital_utilization` | 0.75 | Eliminates margin breach days across all 13 pairs on the current window; 1.00 breaches on 38-203 days per pair |
@@ -174,6 +228,15 @@ Band thresholds at this target:
 | Action | Close both legs fully |
 | Resulting state | Flat, no position remains |
 
+### Scenario 5 -- Deposit
+
+| Field | Value |
+|---|---|
+| Event | $10,000 deposited; NLV now ~$20,000, `base_capital` still $10,000 |
+| Automated action | **None.** Alert on the divergence only. |
+| Human action | Decide whether to run the larger size; if yes, set `base_capital` to $20,000 |
+| Resulting state | Target becomes $9,375. Short notional is now ~50% below target, so the next check trips the Foil Decay Band and recommends the resize through normal band logic. |
+
 ---
 
 ## 5. Explicit scope cuts
@@ -186,6 +249,7 @@ Named here so they don't get silently implemented:
   rule is a new strategy parameter requiring its own justification.
 - **No target ratchet-up.** Target shrinks under margin stress and never grows
   back. No reinvestment of P&L.
+- **No automatic sizing on deposit.** Detect and alert; never act. See section 1.
 - **No auxiliary collateral sleeve** (BRK, GLD, etc.) to support the margin
   cushion. Logged as an open decision; it changes the margin model materially.
 - **Costs still omitted:** expense ratio (already embedded in LETF price

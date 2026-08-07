@@ -58,8 +58,7 @@ the codebase, and adding the monitor cannot create a second.
 - [ ] Connect to IBKR paper via `ib_async`. Confirm the 2FA situation on the way
       through -- see open decisions.
 - [ ] Read TSLA/TSLL positions, `NetLiquidation`, `MaintMarginReq`.
-- [ ] On startup: adopt `target` from current short notional, persist to a state
-      file, and **report what was adopted**. Persist peak equity the same way.
+- [ ] On startup: derive target from MONITOR_BASE_CAPITAL; persist peak_equity only.
 - [ ] Run the phase 1a decision function on a timer. Log every check.
 - [ ] Console output only. No Telegram yet.
 
@@ -140,7 +139,7 @@ makes the first of these much easier to calibrate.
   may see little benefit even above the threshold.
 - **Auxiliary collateral sleeve** (BRK, GLD) to support the margin cushion.
   Scope-cut; changes the margin model materially.
-- **`target` reconciliation after manual rebalances** -- deferred to Phase 2.
+- automatic sizing on deposit — detect and alert only, see STRATEGY_SPEC section 1.
 
 ---
 
