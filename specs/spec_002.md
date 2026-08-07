@@ -25,8 +25,7 @@ afterward. That is the point.
 - **Target ratchet-up.** Target shrinks under stress and never grows back.
 - **Kill switch.** It is a human decision with no automated trigger
   (STRATEGY_SPEC section 1). There is nothing to backtest. Do not invent one.
-- Intraday check cadence (spec 003), grid search (spec 004), notifications,
-  broker code.
+- Intraday check cadence and band grid search -- both deferred, see ROADMAP.
 - Any change to `engine.py`. All new P&L still routes through it.
 
 ---
