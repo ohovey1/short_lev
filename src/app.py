@@ -280,6 +280,20 @@ else:
              "lower bound on live turnover.",
     )
     c12.metric("Breakeven borrow", f"{result['breakeven_borrow']:.2%}")
+    c13, c14, _ = st.columns(3)
+    c13.metric(
+        "Stopped",
+        f"{result['stop_date']:%Y-%m-%d}" if result["stopped"] else "No",
+        help="Drawdown stop: both legs closed once account equity fell the "
+             "configured fraction below its running peak. The run stays flat "
+             "afterward -- no re-entry.",
+    )
+    c14.metric(
+        "De-risk events", f"{result['n_derisk']}",
+        help="Margin cushion went negative and both legs were reset to a "
+             "target recomputed from current equity. Target ratchets down "
+             "only, never back up.",
+    )
 
 st.subheader("Equity curve ($)")
 # Display offset only: equity = starting capital + cumulative P/L (not P&L math).

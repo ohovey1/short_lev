@@ -163,6 +163,10 @@ def leaderboard(strategy, hold_days, long_short_band, foil_decay_band, capital_u
         })
         if strategy == "Band":
             row["Min margin cushion ($)"] = net["min_margin_cushion"]
+            # A stopped pair's return is its return at the stop -- the column
+            # says enough, so the figure is not annotated.
+            row["Stopped"] = net["stopped"]
+            row["De-risks"] = net["n_derisk"]
         rows.append(row)
     return pd.DataFrame(rows)
 
