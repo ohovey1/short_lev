@@ -148,4 +148,98 @@ not commit until I have reviewed the diff.
 
 ## Result
 
-*(Fill in after the session.)*
+**All six gates pass.** Implemented as specced across items 1-4; no scope added,
+no trigger condition altered.
+
+### Gates
+
+1. **Regression, bitwise** -- PASS. `scripts/hash_band.py` (new) digests
+   `float.hex()` of every raw float the backtest produces -- every equity-curve
+   and margin-cushion value, ten scalar metrics, and **every trade row**
+   individually (trigger, both traded amounts, per-leg P&L, entry/exit prices) --
+   across 5 parameter arms x 13 pairs. The grand digest is identical pre- and
+   post-refactor: `88db6fc1...77bf88ba`. All 65 pair-arm digests match; the
+   `diff` is empty. Trade rows are hashed per-row on purpose: turnover is a sum
+   and could net an error out, but a wrong `traded_lev` on a single long-short
+   row moves the digest immediately.
+2. **`verify_band.py` and `verify_engine.py`** -- PASS, and both reproduce their
+   pre-refactor output as an exact text diff. `engine.py` was not touched.
+3. **Unit tests on `evaluate()`** -- PASS (check l). One case per trigger plus a
+   no-trip case, called directly with hand-built states and no backtest.
+   Expected values reuse the arithmetic already hand-derived in checks h, i, and
+   a, so the two layers are anchored independently: de-risk lands on
+   `target_new = 371.900826`, long-short on `net_delta = 90.909091`. The no-trip
+   case asserts `net_delta` and `margin_cushion` are populated anyway.
+4. **Priority** -- PASS (check m). Drawdown + cushion breached together returns
+   `"drawdown stop"` with `terminal=True`. The two lower boundaries are pinned
+   too: cushion + foil returns de-risk, foil + long-short returns foil decay.
+5. **Knobs** -- PASS (check n). With `drawdown_stop=None, margin_derisk=False`, a
+   state breaching everything surfaces a band and never a closing rule, and a
+   state breaching *only* the closing rules returns `None`. The same state with
+   the knobs on returns `"drawdown stop"`, proving the knobs did the suppressing
+   rather than the state being inert.
+6. **grep** -- PASS. `grep -n "long_short_band\|foil_decay_band" src/band.py`:
+
+   ```
+   7:  - |short notional - target| > foil_decay_band * target
+   9:  - else |net delta| > long_short_band * target -> re-neutralize via the LONG leg only
+   40:def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_band=0.10,
+   171:                long_short_band=long_short_band,
+   172:                foil_decay_band=foil_decay_band,
+   ```
+
+   Docstring, signature defaults, and the two `BandParams` keyword lines. Zero
+   comparisons.
+
+### How the loop reconstructs each branch
+
+`Decision` carries seven fields, but the four branches did very different side-effect
+work. Everything proved derivable with no extra field:
+
+- `traded_lev`/`traded_und` are `abs(new - old)` on each leg, uniformly for all
+  four triggers. This is bit-exact, not approximate: `abs(SN - SN)` is exactly
+  `+0.0` (recovering the long-short literal), `abs(0.0 - SN) == SN` for the stop
+  (both notionals are provably non-negative), and `abs(L*SN - LN)` vs band.py's
+  `abs(net_delta) = abs(LN - L*SN)` are exact IEEE-754 negations. Verified
+  empirically over 600k random trials before relying on it, then confirmed by the
+  digest.
+- Entry prices advance on `if not d.terminal` -- a stop opens no new segment.
+- The ratchet is an unconditional `target = d.new_target`; `evaluate()` does the
+  `min` internally and returns `state.target` unchanged on every other path.
+
+The loop's only remaining non-numeric reads are `d.trigger is not None`,
+`d.terminal`, and `d.trigger == "margin de-risk"` (for `n_derisk`). No trigger
+condition is re-derived.
+
+### Deviations
+
+- **`hash_band.py` runs 5 arms, not just the defaults.** At every default-ish
+  setting **no pair stops** on this cached window (confirmed by running them), so
+  a digest built only from default arms cannot see the terminal branch at all.
+  The added `cu=0.75, drawdown_stop=0.005` arm stops 11 of 13 pairs and makes two
+  real traps digest-visible: returning `0.0` for `new_target` on a stop (
+  `final_target` is nonzero on stopped pairs -- 4545.454545 on UPRO/TMF/SOXL,
+  4687.50 on CONL) and wrongly advancing the segment entry prices. This is
+  strictly more coverage than the gate asked for; it can only catch a regression,
+  never manufacture a false failure, since it is compared pre- vs post-refactor
+  against a baseline captured on clean HEAD.
+- **`scripts/hash_band.py` is committed**, unlike spec 002's ad-hoc digest which
+  was never checked in and had to be rewritten from scratch here. Spec 004 and any
+  later refactor of this loop can now re-run the same gate.
+
+### Preserved, not fixed
+
+- **The borrow-timing seam.** `account_equity` still excludes the current day's
+  borrow while the recorded `margin_cushion` series is post-borrow.
+  `Decision.margin_cushion` is `account_equity - margin_required` -- a pre-borrow,
+  pre-action report field for the monitor -- and deliberately does **not** feed
+  `band.py`'s recorded series, which still computes from the loop's own
+  post-action `short_notional`. Wiring one into the other would have changed
+  output every single day. Documented in `decision.evaluate()`'s docstring, and
+  still awaiting its own spec.
+
+### Deferred
+
+Nothing from this spec. Out-of-scope items (IBKR connection, monitor loop, state
+file, Telegram, any trigger-condition change, any `engine.py` change, a
+monitor/executor class hierarchy) were not built, as specced.

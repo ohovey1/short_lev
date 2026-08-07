@@ -64,6 +64,7 @@ or treat its output as a live-trading projection.
 ## Hard constraints
 - **Both `band.py` and `backtest.py` MUST call the engine. Never reimplement P&L math in either.** (A prior project's backtest diverged from its live engine. Don't repeat it.)
 - The engine stays pure: no I/O, no global state, no date awareness beyond the prices passed in.
+- **The band trip conditions live only in `decision.evaluate()`. Never reimplement them.** `band.py` owns iteration and accounting; the live monitor will call the same function. Same reasoning as the engine constraint above: one definition, two callers. `decision.py` is pure -- no I/O, no dates, no bars.
 - Borrow cost is real, not a stub -- both `band.py` and `backtest.py` must keep charging it.
 
 ## Pairing
@@ -85,6 +86,7 @@ editing the dict. No discovery algorithm.
 src/config.py           pair registry dict
 src/data.py             layer 1: get_prices() + cache + _fetch_polygon()
 src/engine.py           layer 2: pure two-leg daily P&L + real borrow accrual
+src/decision.py         layer 2 sibling: pure point-in-time rebalance decision
 src/backtest.py         layer 3: loops engine over a window -> equity curve + metrics
 src/band.py             layer 3 sibling: band-rebalanced single-position backtest
 src/app.py              layer 4: streamlit UI
