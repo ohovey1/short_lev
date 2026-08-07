@@ -17,6 +17,13 @@ Checks:
   i. Margin de-risk, hand-checked on a fabricated path (spec 002 gate 2).
   j. Property: a de-risk restores the cushion, no thrash (spec 002 gate 4).
   k. Max account-equity drawdown vs drawdown_stop (spec 002 gate 5).
+  l-n. Direct unit tests on decision.evaluate(): one case per trigger plus a
+     no-trip case, the priority ordering, and the closing-rule knobs (spec 003
+     gates 3-5). These call evaluate() with hand-built states and no backtest.
+
+Spec 003's gate 1 (the bitwise regression proving the decision.py extraction is
+behavior-neutral) is not run from here either: see scripts/hash_band.py, which
+digests raw float.hex() values across 5 parameter arms x 13 pairs.
 
 Spec 002 gate 3 (the regression proving the loop reordering is behavior-neutral)
 is not run from here: it compares this script's full output, with the closing
@@ -38,6 +45,7 @@ import backtest
 import band
 import config
 import data
+import decision
 import engine
 
 PAIR_KEY = "TQQQ"  # L=3; check (a) fabricates its prices, (b)/(c) use the cache
@@ -519,10 +527,238 @@ def check_k():
     )
 
 
+DEFAULT_PARAMS = decision.BandParams(
+    long_short_band=0.10, foil_decay_band=0.10, capital_utilization=0.75,
+    drawdown_stop=0.10, margin_derisk=True,
+)
+
+
+def state(short_notional, long_notional, target, account_equity, peak_equity,
+          margin_required, leverage=3.0, margin_multiplier=1.65):
+    """A PositionState with the boilerplate filled in."""
+    return decision.PositionState(
+        short_notional=short_notional, long_notional=long_notional,
+        leverage=leverage, target=target, account_equity=account_equity,
+        peak_equity=peak_equity, margin_required=margin_required,
+        margin_multiplier=margin_multiplier,
+    )
+
+
+def check_l():
+    """Gate 3 -- one direct unit test per trigger, plus a no-trip case.
+
+    These call decision.evaluate() with no backtest at all. Expected values are
+    the same hand-derived arithmetic checks h, i, and a already pin down, so
+    the two layers are anchored independently.
+
+      stop:      check h's numbers -- peak 1000, equity 896.969697, stop 0.10
+                 -> threshold 900.0, so it trips. Sizes go to 0 and target is
+                 UNTOUCHED (band.py never ratchets on a stop, and final_target
+                 is a reported field).
+      de-risk:   check i's numbers -- equity 818.181818 < margin required
+                 1050.0, cu 0.75, mm 1.65 -> target_new 371.900826, long leg
+                 2x that (leverage=2 here, matching check i's TSLL-style math).
+      foil:      short 15% above a target of 1000 at a 0.10 band -> both legs
+                 reset to target.
+      long-short: check a's numbers -- target 606.060606, net_delta 90.909091
+                 against a threshold of 60.606061. The SHORT is unchanged and
+                 the long goes to L * short.
+      no trip:   inside every band -> trigger None, new_* mirror current state.
+    """
+    print("--- l. evaluate() unit tests, one per trigger + no-trip ---")
+    lines = []
+    ok = True
+
+    # Drawdown stop (check h's arithmetic).
+    d = decision.evaluate(
+        state(606.060606, 1818.181818, 606.060606, 896.969697, 1000.0, 100.0),
+        DEFAULT_PARAMS,
+    )
+    stop_ok = (
+        d.trigger == "drawdown stop" and d.terminal is True
+        and d.new_short_notional == 0.0 and d.new_long_notional == 0.0
+        and d.new_target == 606.060606      # untouched by a stop
+    )
+    ok = ok and stop_ok
+    lines.append(f"stop: trigger '{d.trigger}', terminal {d.terminal}, sizes "
+                 f"{d.new_short_notional}/{d.new_long_notional}, new_target "
+                 f"{d.new_target:.6f} (expected target unchanged)"
+                 f"{'  [FAIL]' if not stop_ok else ''}")
+
+    # Margin de-risk (check i's arithmetic), leverage 2 so the long leg is 2x.
+    equity = 818.181818
+    expected_target_new = (equity * 0.75) / 1.65
+    d = decision.evaluate(
+        state(636.363636, 1272.727272, 454.545455, equity, 1000.0, 1050.0,
+              leverage=2.0),
+        decision.BandParams(long_short_band=10.0, foil_decay_band=10.0,
+                            capital_utilization=0.75, drawdown_stop=None,
+                            margin_derisk=True),
+    )
+    derisk_ok = (
+        d.trigger == "margin de-risk" and d.terminal is False
+        and abs(d.new_short_notional - expected_target_new) < 1e-9
+        and abs(d.new_long_notional - 2 * expected_target_new) < 1e-9
+        and abs(d.new_target - expected_target_new) < 1e-9   # ratcheted down
+    )
+    ok = ok and derisk_ok
+    lines.append(f"de-risk: trigger '{d.trigger}', target_new "
+                 f"{d.new_short_notional:.6f} (expected "
+                 f"{expected_target_new:.6f}), ratcheted to {d.new_target:.6f}"
+                 f"{'  [FAIL]' if not derisk_ok else ''}")
+
+    # Foil decay band: short 15% off target, comfortably outside a 0.10 band.
+    d = decision.evaluate(
+        state(1150.0, 3000.0, 1000.0, 10000.0, 10000.0, 1897.5),
+        DEFAULT_PARAMS,
+    )
+    foil_ok = (
+        d.trigger == "foil decay band" and d.terminal is False
+        and d.new_short_notional == 1000.0 and d.new_long_notional == 3000.0
+        and d.new_target == 1000.0
+    )
+    ok = ok and foil_ok
+    lines.append(f"foil: trigger '{d.trigger}', both legs to "
+                 f"{d.new_short_notional}/{d.new_long_notional} (expected "
+                 f"1000.0/3000.0){'  [FAIL]' if not foil_ok else ''}")
+
+    # Long-short band (check a's arithmetic): short unchanged, long to L*short.
+    target = 20000.0 / 33.0        # 606.060606
+    short_notional = target        # LETF flat, so the short has not drifted
+    long_notional = 3 * target * 1.05
+    d = decision.evaluate(
+        state(short_notional, long_notional, target, 10000.0, 10000.0, 1000.0),
+        DEFAULT_PARAMS,
+    )
+    ls_ok = (
+        d.trigger == "long-short band" and d.terminal is False
+        and d.new_short_notional == short_notional        # short untouched
+        and abs(d.new_long_notional - 3 * short_notional) < 1e-9
+        and d.new_target == target
+        and abs(d.net_delta - 1000.0 / 11.0) < 1e-9
+    )
+    ok = ok and ls_ok
+    lines.append(f"long-short: trigger '{d.trigger}', short unchanged "
+                 f"{d.new_short_notional == short_notional}, net_delta "
+                 f"{d.net_delta:.6f} (expected {1000.0/11.0:.6f})"
+                 f"{'  [FAIL]' if not ls_ok else ''}")
+
+    # No trip: delta-neutral, short exactly at target, healthy equity.
+    d = decision.evaluate(
+        state(1000.0, 3000.0, 1000.0, 10000.0, 10000.0, 1650.0),
+        DEFAULT_PARAMS,
+    )
+    none_ok = (
+        d.trigger is None and d.terminal is False
+        and d.new_short_notional == 1000.0 and d.new_long_notional == 3000.0
+        and d.new_target == 1000.0
+        and d.net_delta == 0.0
+        and d.margin_cushion == 10000.0 - 1650.0   # populated even untripped
+    )
+    ok = ok and none_ok
+    lines.append(f"no-trip: trigger {d.trigger}, new_* mirror state, net_delta "
+                 f"{d.net_delta}, margin_cushion {d.margin_cushion:.2f} "
+                 f"(both populated){'  [FAIL]' if not none_ok else ''}")
+
+    return check("l", ok, "; ".join(lines))
+
+
+def check_m():
+    """Gate 4 -- priority: a state satisfying several triggers returns the
+    highest-priority one. Pins the whole ordering, not just the top of it."""
+    print("--- m. Trigger priority ordering ---")
+    lines = []
+    ok = True
+
+    # Drawdown AND cushion breached together -> the stop wins, terminally.
+    both = state(636.363636, 1272.727272, 454.545455,
+                 account_equity=800.0, peak_equity=1000.0, margin_required=1050.0)
+    d = decision.evaluate(both, DEFAULT_PARAMS)
+    p1 = d.trigger == "drawdown stop" and d.terminal is True
+    ok = ok and p1
+    lines.append(f"drawdown+cushion -> '{d.trigger}' terminal {d.terminal} "
+                 f"(expected 'drawdown stop' True){'  [FAIL]' if not p1 else ''}")
+
+    # Cushion AND foil decay breached, stop disabled -> de-risk wins.
+    d = decision.evaluate(
+        both,
+        decision.BandParams(long_short_band=0.10, foil_decay_band=0.10,
+                            capital_utilization=0.75, drawdown_stop=None,
+                            margin_derisk=True),
+    )
+    p2 = d.trigger == "margin de-risk"
+    ok = ok and p2
+    lines.append(f"cushion+foil -> '{d.trigger}' (expected 'margin de-risk')"
+                 f"{'  [FAIL]' if not p2 else ''}")
+
+    # Foil decay AND long-short breached, closing rules off -> foil wins.
+    d = decision.evaluate(
+        state(1150.0, 5000.0, 1000.0, 10000.0, 10000.0, 1897.5),
+        decision.BandParams(long_short_band=0.10, foil_decay_band=0.10,
+                            capital_utilization=0.75, drawdown_stop=None,
+                            margin_derisk=False),
+    )
+    p3 = d.trigger == "foil decay band"
+    ok = ok and p3
+    lines.append(f"foil+long-short -> '{d.trigger}' (expected 'foil decay band')"
+                 f"{'  [FAIL]' if not p3 else ''}")
+
+    return check("m", ok, "; ".join(lines))
+
+
+def check_n():
+    """Gate 5 -- knobs: with drawdown_stop=None and margin_derisk=False, the
+    two closing triggers never fire even on states that would otherwise trip
+    them, and the bands still work."""
+    print("--- n. Closing-rule knobs disable only their own triggers ---")
+    off = decision.BandParams(long_short_band=0.10, foil_decay_band=0.10,
+                              capital_utilization=0.75, drawdown_stop=None,
+                              margin_derisk=False)
+    lines = []
+    ok = True
+
+    # Everything breached at once: with the knobs off, a band must surface.
+    d = decision.evaluate(
+        state(1150.0, 5000.0, 1000.0, account_equity=500.0, peak_equity=10000.0,
+              margin_required=1897.5),
+        off,
+    )
+    k1 = d.trigger == "foil decay band" and d.terminal is False
+    ok = ok and k1
+    lines.append(f"all breached, knobs off -> '{d.trigger}' terminal "
+                 f"{d.terminal} (expected a band, never a closing rule)"
+                 f"{'  [FAIL]' if not k1 else ''}")
+
+    # ONLY the closing rules breached (both bands well inside) -> nothing fires.
+    d = decision.evaluate(
+        state(1000.0, 3000.0, 1000.0, account_equity=500.0, peak_equity=10000.0,
+              margin_required=1650.0),
+        off,
+    )
+    k2 = d.trigger is None and d.terminal is False
+    ok = ok and k2
+    lines.append(f"only closing rules breached, knobs off -> trigger "
+                 f"{d.trigger} (expected None){'  [FAIL]' if not k2 else ''}")
+
+    # Same state with the knobs ON must fire, proving the state was live.
+    d = decision.evaluate(
+        state(1000.0, 3000.0, 1000.0, account_equity=500.0, peak_equity=10000.0,
+              margin_required=1650.0),
+        DEFAULT_PARAMS,
+    )
+    k3 = d.trigger == "drawdown stop"
+    ok = ok and k3
+    lines.append(f"same state, knobs on -> '{d.trigger}' (expected 'drawdown "
+                 f"stop', proving the knobs did the suppressing)"
+                 f"{'  [FAIL]' if not k3 else ''}")
+
+    return check("n", ok, "; ".join(lines))
+
+
 def main():
     results = [
         check_a(), check_b(), check_c(), check_d(), check_e(), check_f(), check_g(),
-        check_h(), check_i(), check_j(), check_k(),
+        check_h(), check_i(), check_j(), check_k(), check_l(), check_m(), check_n(),
     ]
     print("=" * 60)
     if all(results):
