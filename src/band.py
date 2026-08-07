@@ -12,13 +12,18 @@ All P&L math goes through engine.position_pnl / engine.borrow_cost, same as
 backtest.py. This file holds only state (the current segment) and the band
 policy.
 
-Also tracks margin cushion (equity - margin_required) per day as a pure
-observation: it does not feed back into the foil_decay_band/long_short_band
-trigger logic above, it just reports whether a real account backing this position
-would have enough equity to meet the margin the short leg's current size
-requires. capital_utilization (default 0.75) leaves a deliberate slice of
-base_capital undeployed as headroom against that cushion going negative --
-it reduces breach risk, it does not eliminate it.
+Two closing rules run ahead of the bands, checked in this order:
+
+  - account equity below drawdown_stop of its running peak -> close both legs,
+    terminally. The run stays flat for the remainder of the window.
+  - margin cushion (equity - margin_required) negative -> reset both legs to a
+    target recomputed from current equity. A partial reset, not a close.
+
+Margin cushion is therefore a live trigger, not an observation: it feeds back
+into the trigger logic and can resize the position. capital_utilization
+(default 0.75) leaves a deliberate slice of base_capital undeployed as headroom
+against the cushion going negative -- it reduces breach risk, it does not
+eliminate it, which is why the de-risk rule exists.
 """
 
 import pandas as pd
@@ -30,7 +35,8 @@ import engine
 
 def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_band=0.10,
                       capital_utilization=0.75, price_field="close",
-                      lookback_days=None, borrow_rate_annual=None):
+                      lookback_days=None, borrow_rate_annual=None,
+                      drawdown_stop=0.10, margin_derisk=True):
     """Run the band-rebalanced backtest for one pair.
 
     pair_key indexes config.PAIRS. target (the steady-state short notional) is
@@ -50,6 +56,21 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
     Bands are evaluated once per day on the close; live polling (target: every
     15 minutes) will trip bands strictly more often. n_trades and turnover
     here are therefore a lower bound on live behavior.
+
+    Two closing rules run ahead of the bands, both measured on account equity
+    (base_capital + cumulative P&L), not on the 0-based equity_curve:
+
+      drawdown_stop  -- fraction below the running equity peak that closes both
+                        legs terminally. Default 0.10. Once stopped the run
+                        stays flat: no marks, no trades, no borrow, and the
+                        curve flat-lines to the end of the window.
+      margin_derisk  -- when True (default), a negative margin cushion resets
+                        both legs to a target recomputed from current equity.
+                        target ratchets DOWN only and never grows back.
+
+    Passing drawdown_stop=None and margin_derisk=False disables both and
+    reproduces pre-spec-002 output exactly. They are TEST KNOBS for that
+    regression check, not strategy parameters -- live behavior is the defaults.
     """
     pair = config.PAIRS[pair_key]
     L = pair["leverage"]
@@ -64,7 +85,10 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
     lev_p = lev.loc[dates, price_field]
     und_p = und.loc[dates, price_field]
 
-    target = (base_capital * capital_utilization) / pair["margin_multiplier"]  # steady-state short notional
+    # Steady-state short notional. Loop state, not a constant: a margin de-risk
+    # recomputes it from current equity and ratchets it DOWN (never up), so the
+    # foil decay band below always measures against the *current* target.
+    target = (base_capital * capital_utilization) / pair["margin_multiplier"]
 
     # Segment state: dollar sizes fixed at segment entry, marked by the engine.
     lev_e = lev_p.iloc[0]
@@ -84,16 +108,114 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
     equity = []
     margin_cushion = []  # equity - margin_required, per day
 
+    # Closing-rule state. peak_equity starts at base_capital, not zero: the
+    # drawdown stop measures account equity against its running peak, and the
+    # run starts at base_capital by definition.
+    peak_equity = base_capital
+    stopped = False
+    stop_date = None
+    n_derisk = 0
+
     for date in dates:
+        # Flat after a stop: no legs, so nothing to mark, trade, or borrow. The
+        # curve carries its stopped value to the end of the window so the chart
+        # and every downstream metric still compute. Cushion is just equity
+        # (margin required on a zero short is zero), hence never negative.
+        if stopped:
+            equity.append(equity[-1])
+            margin_cushion.append(equity[-1] + base_capital)
+            continue
+
         lev_now = lev_p.loc[date]
         und_now = und_p.loc[date]
 
+        # --- 1. Mark the position, before any action ------------------------
         short_notional = short_size * (lev_now / lev_e)
         long_notional = long_size * (und_now / und_e)
         net_delta = long_notional - L * short_notional
 
-        # Band checks (foil decay band first: its reset also re-neutralizes delta).
-        if abs(short_notional - target) > foil_decay_band * target:
+        # Account equity BEFORE any action today: base capital plus realized P&L
+        # plus the open segment's mark, less borrow accrued through YESTERDAY
+        # (today's accrual is charged after the action, below). The closing rules
+        # measure against this, never against equity_curve -- that series is
+        # 0-based cumulative P&L, and a 10% drawdown on a near-zero series would
+        # be meaningless.
+        #
+        # This is a pure read: realizing a segment moves value from the mark into
+        # `realized` without changing the total, so peeking here cannot perturb
+        # any existing number.
+        mark = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
+        account_equity = base_capital + realized + mark["net"] - borrow_paid
+
+        # --- 2-4. Triggers, highest urgency first ---------------------------
+        # One chain, so at most one of these fires on a given day. Order is
+        # load-bearing: drawdown stop (terminal) beats margin de-risk (its reset
+        # also re-neutralizes delta, making the bands moot that day), which beats
+        # the bands. Steps 2 and 3 land in the next two spec items; the band
+        # checks below are step 4 and are unchanged.
+        #
+        peak_equity = max(peak_equity, account_equity)
+
+        if drawdown_stop is not None and account_equity < peak_equity * (1 - drawdown_stop):
+            # Terminal: realize the open segment, close both legs, stay flat.
+            r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
+            realized += r["net"]
+            traded_lev = short_notional
+            traded_und = long_notional
+            turnover_lev += traded_lev
+            turnover_und += traded_und
+            trades.append({
+                "open_date": seg_date, "close_date": date, "trigger": "drawdown stop",
+                "lev_entry": lev_e, "lev_exit": lev_now,
+                "und_entry": und_e, "und_exit": und_now,
+                "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
+                "total_pnl": r["net"],
+                "traded_lev": traded_lev, "traded_und": traded_und,
+            })
+            short_size, long_size = 0.0, 0.0
+            short_notional, long_notional = 0.0, 0.0
+            seg_date = date
+            n_trades += 1
+            stopped = True
+            stop_date = date
+        elif margin_derisk and account_equity < pair["margin_multiplier"] * short_notional:
+            # Cushion is negative (equity < margin required). Recompute target
+            # from CURRENT equity and reset both legs to it -- a partial reset,
+            # not a close. Ranks above the bands: being under-margined is more
+            # urgent than being off-hedge, and this reset re-neutralizes delta
+            # anyway, so the band checks would be moot today.
+            r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
+            realized += r["net"]
+
+            if account_equity <= 0:
+                # Nothing left to margin. Close rather than resize; a target
+                # computed from non-positive equity is meaningless. In practice
+                # the drawdown stop fires long before this.
+                target_new = 0.0
+            else:
+                target_new = (account_equity * capital_utilization) / pair["margin_multiplier"]
+
+            traded_lev = abs(target_new - short_notional)
+            traded_und = abs(L * target_new - long_notional)
+            turnover_lev += traded_lev
+            turnover_und += traded_und
+            trades.append({
+                "open_date": seg_date, "close_date": date, "trigger": "margin de-risk",
+                "lev_entry": lev_e, "lev_exit": lev_now,
+                "und_entry": und_e, "und_exit": und_now,
+                "short_pnl": r["short_pnl"], "long_pnl": r["long_pnl"],
+                "total_pnl": r["net"],
+                "traded_lev": traded_lev, "traded_und": traded_und,
+            })
+            lev_e, und_e = lev_now, und_now
+            short_size, long_size = target_new, L * target_new
+            short_notional, long_notional = target_new, L * target_new
+            seg_date = date
+            n_trades += 1
+            n_derisk += 1
+            target = min(target, target_new)  # ratchets DOWN only, never back up
+        # Foil decay band first: its reset also re-neutralizes delta.
+        elif abs(short_notional - target) > foil_decay_band * target:
             r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
             realized += r["net"]
             traded_lev = abs(target - short_notional)
@@ -133,6 +255,9 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
             seg_date = date
             n_trades += 1
 
+        # --- 5. Accrue borrow on the POST-action short notional, then record --
+        # Post-action is deliberate: a reset above already rewrote short_notional,
+        # so the day is charged on the size actually carried out of it.
         borrow_paid += engine.borrow_cost(short_notional, borrow_rate_annual)
         notional_days += short_notional
 
@@ -170,6 +295,10 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
             margin_cushion_series[margin_cushion_series < 0].index[0]
             if margin_cushion_series.min() < 0 else None
         ),
+        "stopped": stopped,
+        "stop_date": stop_date,
+        "n_derisk": n_derisk,
+        "final_target": target,
         "lev_ohlc": lev_ohlc,
         "und_ohlc": und_ohlc,
     }
