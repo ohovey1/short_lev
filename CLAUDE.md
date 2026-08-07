@@ -64,7 +64,8 @@ or treat its output as a live-trading projection.
 ## Hard constraints
 - **Both `band.py` and `backtest.py` MUST call the engine. Never reimplement P&L math in either.** (A prior project's backtest diverged from its live engine. Don't repeat it.)
 - The engine stays pure: no I/O, no global state, no date awareness beyond the prices passed in.
-- **The band trip conditions live only in `decision.evaluate()`. Never reimplement them.** `band.py` owns iteration and accounting; the live monitor will call the same function. Same reasoning as the engine constraint above: one definition, two callers. `decision.py` is pure -- no I/O, no dates, no bars.
+- **The band trip conditions live only in `decision.evaluate()`. Never reimplement them.** `band.py` owns iteration and accounting; `monitor.py` calls the same function against a live account. Same reasoning as the engine constraint above: one definition, two callers. `decision.py` is pure -- no I/O, no dates, no bars.
+- **`monitor.py` reads and never trades.** No order submission anywhere in the repo, not behind a flag. It also never persists `target` (always derived) and never applies the de-risk ratchet -- moving the reference for a trade that never happened corrupts every later band reading.
 - Borrow cost is real, not a stub -- both `band.py` and `backtest.py` must keep charging it.
 
 ## Pairing
@@ -91,8 +92,13 @@ src/backtest.py         layer 3: loops engine over a window -> equity curve + me
 src/band.py             layer 3 sibling: band-rebalanced single-position backtest
 src/app.py              layer 4: streamlit UI
 src/pages/              additional Streamlit pages (strategy explainer, pair leaderboard)
-.env                    POLYGON_API_KEY=... (gitignored)
+src/broker.py           IBKR reads: connect + PositionState. READ-ONLY, no orders
+src/monitor_state.py    persisted monitor state: peak_equity only, never target
+src/monitor.py          the live monitor loop: reads, calls evaluate(), logs
+.env                    POLYGON_API_KEY, IB_* coordinates, MONITOR_* (gitignored)
+.env.example            committed template, blank values, no credentials
 cache/                  price CSVs (committed seed data); borrow_*.csv (gitignored)
+data/                   monitor runtime state (gitignored; override path in deploy)
 scripts/                verify_*.py: gate checks for the engine and the two backtests
 docs/                   STRATEGY_SPEC.md, GLOSSARY.md, strategy.md, AUTOMATION.md
 specs/                  spec_NNN.md: the active session's scope and gate

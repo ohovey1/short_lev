@@ -24,3 +24,8 @@ __pycache__/
 **/cache/borrow_rates.csv
 **/cache/borrow_history.csv
 src/pages/cache/
+
+# Monitor runtime state (peak_equity). Local-dev location only -- deployment
+# MUST point MONITOR_STATE_PATH outside the repo tree, since a re-clone that
+# wipes this file silently disables the drawdown stop.
+data/

@@ -26,9 +26,10 @@ loop are all ticker-agnostic -- so no code changes were needed to add them.
 # much pricier).
 
 # live: True only for pairs actually cleared for live trading once automation
-# exists. Everything is False today -- no broker/execution code exists yet
-# (see docs/AUTOMATION.md). This is a manual, reviewed flag: nothing should
-# ever flip to True except by a human editing this file and committing it.
+# exists. Everything is False today. The monitor (src/monitor.py) reads a real
+# account but only reads -- there is still no order-submission code anywhere in
+# the repo (see docs/AUTOMATION.md). This is a manual, reviewed flag: nothing
+# should ever flip to True except by a human editing this file and committing it.
 
 # margin_multiplier: cash required per $1 of short notional, i.e. target =
 # cash / margin_multiplier. Derived from the standard exchange formula (long
@@ -62,3 +63,14 @@ PAIRS = {
     "TSLL": {"leveraged_ticker": "TSLL", "underlying_ticker": "TSLA", "leverage": 2, "borrow_rate_annual": 0.10, "live": False, "margin_multiplier": 1.60},
     "CONL": {"leveraged_ticker": "CONL", "underlying_ticker": "COIN", "leverage": 2, "borrow_rate_annual": 0.10, "live": False, "margin_multiplier": 1.60},
 }
+
+# Band parameters. These mirror band.run_band_backtest's signature defaults
+# exactly -- the monitor builds its BandParams from these so it cannot drift to
+# separate tuning from the backtest. The duplication with band.py's signature is
+# deliberate for now: spec 004 forbids touching band.py. Unify the two once a
+# spec permits it; until then, changing a value here means changing it there.
+DEFAULT_LONG_SHORT_BAND = 0.10
+DEFAULT_FOIL_DECAY_BAND = 0.10
+DEFAULT_CAPITAL_UTILIZATION = 0.75
+DEFAULT_DRAWDOWN_STOP = 0.10
+DEFAULT_MARGIN_DERISK = True

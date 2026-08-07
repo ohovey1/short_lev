@@ -6,9 +6,14 @@ integration until the signal-only phase is validated.
 
 ## Current state (as of this doc)
 
-- No broker/execution code exists anywhere in the repo. No `ib_async` dependency, no
-  live-runner, no order submission logic.
-- `data.get_borrow_rates()` is the only existing touchpoint with IBKR — pulls the
+- **A read-only monitor exists** (spec 004): `src/broker.py`, `src/monitor_state.py`,
+  `src/monitor.py`, with `ib_async` as a dependency. It reads one manually-opened
+  pair, calls the same `decision.evaluate()` the backtest calls, and logs the
+  decision to the console.
+- **No order submission logic exists anywhere in the repo**, and none is in scope
+  until Phase 3. The monitor only reads. Gateway runs with Read-Only API enabled so
+  that is enforced by the broker rather than by convention.
+- `data.get_borrow_rates()` is the other touchpoint with IBKR — pulls the
   public shortstock FTP list, 12h cache, appends to `cache/borrow_history.csv`.
 - `engine.py` and `band.py` are pure and data-source-agnostic. This is the reusable
   core — live automation should not change this logic, only what feeds it and what it
@@ -52,6 +57,77 @@ Borrow-rate data is unaffected — already IBKR-sourced.
   borrow/buy-in risk. Useful for plumbing validation only, not a substitute for live
   risk-testing.
 
+## Running the monitor (spec 004)
+
+Read-only. Reads one manually-opened TSLA/TSLL position, decides, logs. Never
+trades.
+
+### Gateway prerequisites (operator, not code)
+
+IB Gateway must be running and logged in before the monitor starts. In
+Gateway -> Configure -> Settings -> API -> Settings:
+
+- **Read-Only API: ON.** This makes "no order submission" a property of the broker
+  rather than a promise in a spec. Stays on through Phase 1c.
+- Enable ActiveX and Socket Clients
+- Socket port 4002 (paper)
+- Trusted IPs includes `127.0.0.1`
+
+**There are no IBKR credentials anywhere in this codebase.** Gateway holds the
+authenticated session; the API socket on localhost requires no authentication.
+`.env` carries connection coordinates only — see `.env.example`.
+
+Gateway and TWS cannot hold the same credentials at once: opening TWS to check the
+position will disconnect the monitor. Expected, not a bug — the reconnect path
+handles it. IBKR also resets sessions nightly around 23:45 ET, so disconnects are a
+routine code path rather than an error condition.
+
+### Run
+
+```
+PYTHONPATH=src .venv/Scripts/python.exe src/monitor.py
+```
+
+### `base_capital` is an allocation decision, not NLV
+
+`MONITOR_BASE_CAPITAL` is the capital deliberately committed to this pair. It is
+configuration. It changes only when a human decides to run more or less size, and
+never in response to price, P&L, or account value.
+
+`target` is derived from it every cycle and **never persisted**:
+
+```
+target = (base_capital * capital_utilization) / margin_multiplier
+```
+
+Deriving `target` from live account value instead would make the reference drift
+with P&L, so `abs(short_notional - target)` never accumulates and the foil decay
+band silently never fires — while looking like it works. Full argument in
+`docs/STRATEGY_SPEC.md` section 1; do not re-litigate it here.
+
+A deposit is therefore **detected and alerted, never acted on**. The monitor warns
+when NLV diverges from `base_capital` by more than 10% and takes no sizing action.
+
+### Persisted state
+
+`peak_equity` only, at `MONITOR_STATE_PATH` (default `<repo>/data/state/monitor.json`,
+gitignored). It is the one value that cannot be rebuilt from configuration, and the
+drawdown stop is wrong without it.
+
+**In deployment, point `MONITOR_STATE_PATH` outside the repo tree.** A `git pull` or
+re-clone that wipes the file resets the peak and silently disables the drawdown stop.
+A malformed state file makes the monitor exit loudly rather than reinitialize, for
+the same reason.
+
+### What the monitor deliberately does not do
+
+- **Submit orders.** Not now, not behind a flag.
+- **Persist the de-risk target.** `evaluate()` returns a ratcheted `new_target` on a
+  margin de-risk; the monitor reports it and throws it away. It does not trade, so
+  moving the reference for a trade that never happened would corrupt every
+  subsequent band reading.
+- **Size on deposit.** Detect and alert only.
+
 ## Phased rollout
 
 ### Phase 1 — signal-only bot
@@ -92,7 +168,8 @@ manual intervention needed to recover from a disconnect or restart.
 
 ## Open decisions
 
-- Notification channel: Slack vs. email — not yet chosen.
+- ~~Notification channel: Slack vs. email~~ — resolved: **Telegram**, built in spec
+  005. The monitor never calls the sink directly; something else consumes its output.
 - VPS vs. always-on local machine for Phase 3 — not yet chosen.
 - Timing of Portfolio Margin upgrade relative to the $110,000 NLV plus options
   approval threshold — depends on capital available at automation time, not a
