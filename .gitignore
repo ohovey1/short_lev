@@ -19,3 +19,8 @@ __pycache__/
 .venv/
 *.pyc
 *.txt
+
+# stray nested caches
+**/cache/borrow_rates.csv
+**/cache/borrow_history.csv
+src/pages/cache/
