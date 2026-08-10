@@ -30,6 +30,7 @@ the single most likely bug in this file, it passes every gate except gate 10,
 and it applies to the poll interval AND to every wait in the reconnect backoff.
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -55,6 +56,24 @@ SANITY_TOLERANCE = 0.10
 
 RECONNECT_BACKOFF_START = 10
 RECONNECT_BACKOFF_MAX = 300
+
+# Routine, expected, and not a bug: these get one WARNING line and a DEBUG
+# traceback. Anything else keeps its full traceback -- a genuine logic error in
+# the loop must not be disguised as a nightly Gateway restart. ConnectionError
+# is an OSError subclass; both are named for clarity about what is covered.
+DISCONNECT_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError, TimeoutError)
+
+
+def _env_float(name, default):
+    raw = os.environ.get(name)
+    return float(raw) if raw not in (None, "") else default
+
+
+def _env_bool(name, default):
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 
@@ -415,10 +434,21 @@ def run():
             log.info("interrupted; shutting down")
             broker.disconnect(ib)
             return
-        except Exception:
-            # Disconnects are a primary code path, not error handling: IBKR
+        except DISCONNECT_ERRORS as exc:
+            # Disconnects are a primary code path, not an error path: IBKR
             # resets sessions nightly around 23:45 ET, and opening TWS on the
-            # same credentials will kick this process off. Never exit.
+            # same credentials will kick this process off. Twenty-five lines of
+            # asyncio traceback for an expected nightly event trains you to
+            # ignore the log. One line, with the traceback available at DEBUG.
+            log.warning(
+                "disconnected: %s: %s -- reconnecting in %ds",
+                type(exc).__name__, exc, backoff,
+            )
+            log.debug("disconnect traceback", exc_info=True)
+            ib.sleep(backoff)
+            backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
+        except Exception:
+            # Not a disconnect: a real bug keeps its traceback. Never exit.
             log.exception("cycle failed; retrying in %ds", backoff)
             ib.sleep(backoff)
             backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
