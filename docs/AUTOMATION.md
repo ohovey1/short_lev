@@ -132,6 +132,96 @@ the same reason.
   subsequent band reading.
 - **Size on deposit.** Detect and alert only.
 
+## Telegram alerts and the event log (spec 006)
+
+The monitor produces decisions; `src/notify.py` consumes them and sends. The
+monitor never calls Telegram directly. That seam is what lets the executor later
+consume the same decisions, and it keeps the logic worth testing from being
+welded to a network call.
+
+### Creating the bot
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram and send `/newbot`.
+   Answer the name and username prompts.
+2. BotFather replies with the token, of the form `123456789:AAH...`. That is
+   `TELEGRAM_BOT_TOKEN`.
+3. **Send your new bot a message** — any message. A bot cannot start a
+   conversation with you, so until you write to it first there is no chat to
+   reply into and `getUpdates` returns nothing.
+4. Fetch the chat ID:
+
+   ```
+   curl https://api.telegram.org/bot<TOKEN>/getUpdates
+   ```
+
+   Read `result[0].message.chat.id` out of the JSON. That is
+   `TELEGRAM_CHAT_ID`. A personal chat ID is a positive integer; a group is
+   negative, and the leading `-` is part of the value.
+
+**The bot token is a full credential.** Anyone holding it controls the bot. It
+lives in `.env`, is never committed, and is never logged, not even at DEBUG. If
+it leaks, `/revoke` in BotFather and reissue.
+
+Leaving either variable blank disables Telegram: the monitor runs normally, logs
+to console and JSONL, sends nothing, and raises nothing. Delivery failures are
+recorded and never fatal — a monitor that dies because an alert failed to send
+is worse than one that stays quiet.
+
+### Alert cadence
+
+A tripped band stays tripped until a human acts, so alerting every poll would
+train you to mute it. Instead: send on the transition into a trigger, re-send
+every `ALERT_REPEAT_MINUTES` (default 60) while it stands, and send once at INFO
+on the return to normal. A *change* of trigger sends immediately — it is new
+information.
+
+Dedup state lives in `data/state/alert_state.json`, **separate from
+`monitor.json`**. Losing it costs one duplicate message; losing `peak_equity`
+silently disables the drawdown stop. Different consequences, different files.
+
+### The event log
+
+Two append-only JSONL files under `EVENT_LOG_DIR` (default `data/events`):
+
+- `checks.jsonl` — one line per check, **tripped or not**.
+- `alerts.jsonl` — one line per send attempt, **delivered or not**.
+
+Both halves of those matter. Non-trips are the raw material for the intraday
+cadence question deferred in the ROADMAP: you cannot calibrate a poll interval
+from the trips alone. Failed sends are how you learn the bot went quiet for a
+reason other than nothing happening. Read either with
+`pd.read_json(path, lines=True)`.
+
+Writes never crash the monitor. A full disk is a reason to lose telemetry, not
+a reason to stop watching a live position.
+
+### Heartbeat, and its limitation
+
+Once per day at `HEARTBEAT_HOUR` (default 09:45 local, just after the open) the
+monitor sends an INFO summary: pair, state, target, cushion, checks completed
+since the last heartbeat, and whether anything is tripped. It fires on the first
+poll after that time, so it can be up to one poll interval late.
+
+**This is a heartbeat you must notice missing.** If the monitor dies at 02:00 on
+Tuesday you find out at 09:45 — the process cannot tell you it died, so silence
+has to be the signal, and silence is only a signal if someone is watching for
+it. That is acceptable for a monitor that executes nothing. It stops being
+acceptable once the executor exists, at which point the right answer is an
+external dead-man: a service that alerts when a ping *stops* arriving. Not built
+now, deliberately.
+
+### Trips that are deliberately not sent
+
+When `base_capital` exceeds NLV by more than 10%, the derived target is
+unachievable, and a trip recommending the resize contradicts the sanity warning
+printed above it. Both statements are correct in isolation; together they are
+noise. The trip is still evaluated and written to `checks.jsonl` with
+`unactionable: true` — it is real — but it is not sent. The sanity warning is
+sent instead, at WARNING.
+
+The other two sanity conditions do **not** suppress. An undeployed deposit and a
+position opened at a different size both produce entirely actionable trips.
+
 ## Phased rollout
 
 ### Phase 1 — signal-only bot
@@ -173,7 +263,16 @@ manual intervention needed to recover from a disconnect or restart.
 ## Open decisions
 
 - ~~Notification channel: Slack vs. email~~ — resolved: **Telegram**, built in spec
-  005. The monitor never calls the sink directly; something else consumes its output.
+  006 (`src/notify.py`). The monitor never calls the sink directly; it produces a
+  decision and the sink consumes it.
+- ~~Inbound commands (`/status`, `/positions`)~~ — deferred deliberately, its own
+  spec. Receiving needs either a webhook (a public HTTPS endpoint this box does
+  not expose) or long-polling `getUpdates`, which is a second concurrent loop
+  alongside `ib_async`'s asyncio loop. That is a real design question, not a
+  feature bolted onto an outbound sink. It also needs a chat-ID allowlist, since
+  bots are discoverable by username.
+- An external dead-man for the heartbeat — required before the executor exists,
+  not before. See the heartbeat limitation above.
 - VPS vs. always-on local machine for Phase 3 — not yet chosen.
 - Timing of Portfolio Margin upgrade relative to the $110,000 NLV plus options
   approval threshold — depends on capital available at automation time, not a
