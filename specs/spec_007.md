@@ -218,4 +218,102 @@ not commit until I have reviewed the diff.
 
 ## Result
 
-*(Fill in after the session.)*
+**Offline gates pass. Gates 1-8 are live and not yet run** -- they need the box,
+and gate 8 needs a night. Same split as spec 006.
+
+Gate 9 passes: `verify_band.py`, `verify_engine.py`, and `verify_monitor.py` all
+green, and `hash_band.py`'s GRAND digest is
+`08baa20ac842502aedbb5f647f6ea24cf3128429f17f4a5a1d7d1d0cb85de942`, identical to
+`baseline_005_hash.txt`. `band.py`, `decision.py`, `engine.py`, and `config.py`
+were not touched.
+
+All six items shipped. Files: `src/monitor.py`, `src/alert_state.py`,
+`scripts/verify_monitor.py`, `.env.example`, `docs/VPS.md`,
+`docs/AUTOMATION.md`, and seven new files in `deploy/`.
+
+### Deviations
+
+**1. Item 2's diagnosis was wrong.** The spec says the condition "appears to be
+'none sent today' rather than 'none sent today and we are past the configured
+hour'." It is not: `heartbeat_due` already gated on the hour and returned False
+before HH:MM. The real defect is that the gate was **open-ended** -- 15:24 and
+15:57 are both past 09:45, so a restart on a day with no recorded heartbeat fired
+one immediately, twice. Fixed with a 30-minute catch-up window
+(`alert_state.HEARTBEAT_WINDOW_MINUTES`); past it, the day is skipped rather than
+fired late. The spec's stated fix would have changed nothing.
+
+The double firing 33 minutes apart also means `last_heartbeat_date` was not
+persisting between those two runs. The window makes that harmless, but the
+underlying cause was not chased -- likely the state path, which item 3 moves
+anyway. Worth confirming on the box: after gate 6, check that
+`/var/lib/short-lev/alert_state.json` actually contains `last_heartbeat_date`.
+
+**2. Item 3 names one path; there are three.** `ALERT_STATE_PATH` and
+`EVENT_LOG_DIR` arrived in spec 006, after 007 was written, and both default into
+the repo tree. All three now documented at `/var/lib/short-lev`. No code change
+was needed -- the three resolvers already read env with an in-repo fallback,
+which stays correct for local dev.
+
+**3. The tz switch needed a migration the spec did not mention.** Making `now`
+ET-aware breaks comparison against `last_sent_ts` values already on disk in naive
+form: `TypeError`, caught by the loop's catch-all, becomes a backoff loop that
+never clears until someone deletes the file. Added `alert_state._match_awareness`.
+
+Implemented as **bidirectional** coercion against `now` rather than the planned
+unconditional coerce-to-ET. The one-directional version broke `check_n`, which
+passes a naive `now` -- and that was the useful signal: a dedup ledger must never
+be able to take the monitor down, in either direction.
+
+**4. `docs/VPS.md` scope was wider than "section 8".** The file's own durable
+marker said "section 8 **onward**", and sections 9 and 10 both went stale -- 9
+installed tmux and `mkdir`'d the in-repo state dir, 10 was a TODO list this spec
+mostly completes. Section 7's opening claim ("There are no IBKR credentials in
+this repo **or on this box's disk**") is also made false by IBC. Changed: the
+header marker, one sentence in 7, all of 8, steps 9-15 of section 9, and section
+10. Sections 1-6 untouched.
+
+**5. One behavior change not in the spec.** The in-loop reconnect used to sleep
+`backoff` *before* its first attempt, but the `DISCONNECT_ERRORS` handler has
+already waited by the time the loop re-enters -- a double wait. The helper now
+sleeps only after a *failed* attempt, so the first reconnect try is immediate.
+The log line lost its "in %ds", which was describing a wait that had already
+happened.
+
+### Verified mechanically
+
+`IB.sleep` is a genuine `staticmethod` and the same function object as
+`util.sleep`; it pumps the event loop with no instance and is reusable across
+calls. The plan's fallback was unnecessary. This matters because there is no live
+handle before the first connect, and the handle is dead after a failed reconnect.
+
+Also confirmed by hand: an ET-aware `last_sent_ts` round-trips through the state
+file with its offset, the repeat timer honors it, the heartbeat fires once per
+day, and the 2026-11-01 DST fall-back does not break the window.
+
+### Deferred
+
+- **The IBC download URL in section 9 step 12 is unverified.** Written against
+  `IBCLinux-3.20.0.zip`; check the current release before pasting it.
+- Dashboard unit, inbound Telegram commands, external dead-man, backups of
+  `/var/lib/short-lev` -- all still out of scope, now listed in VPS.md section 10.
+- `PAIR_KEY` is still hardcoded `"TSLL"`.
+
+### Note for the live run
+
+Gate 7 says `grep -ri "password" /opt/short_lev` finds nothing. Taken literally it
+will fail: the word appears ~20 times in the checkout -- `docs/VPS.md` (the
+credential note, the SSH hardening lines, `--disabled-password`),
+`deploy/ibc-config.ini.template` (header warning plus the blank `IbPassword=`),
+`deploy/install-units.sh` (the operator reminder), and older specs. All of them
+are prose or empty keys.
+
+What gate 7 actually needs to establish is that no credential VALUE is in the
+repo. Run this instead:
+
+```bash
+grep -rIn "IbPassword=." /opt/short_lev        # must return nothing
+ls -l /var/lib/short-lev/ibc/config.ini        # must be 600, short-lev
+```
+
+The first finds a filled-in password anywhere in the checkout; the blank
+`IbPassword=` in the template does not match, a real one does.
