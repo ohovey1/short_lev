@@ -5,6 +5,32 @@ archive the rest to `docs/history/` (see `docs/history/scratchpad-2026-06.md`).
 
 ---
 
+### 2026-08-10 (spec 004: monitor core, gates passed on paper)
+
+**Spec:** `specs/spec_004.md`
+
+**Shipped:**
+- All 11 spec 004 gates passed against paper DUQ985373.
+- VPS provisioned and documented (`docs/VPS.md`). Gateway 10.45 headless under
+  Xvfb, VNC over SSH tunnel, monitor running from `/opt/short_lev`.
+
+**Surprised us:**
+- IBKR's actual maintenance margin is ~1.11x short notional, not our modeled
+  1.60. Cause identified: we used the 50% *initial* rate on the single-stock long
+  leg where 25% *maintenance* applies.
+- The model also has the wrong shape -- it assumes `long = leverage x short`, so
+  the ratio drifts with net delta. Observed 0.719 at +$586 delta vs 0.691 at
+  -$146, same short leg.
+- Commissions ~$1/leg. Backtest models none.
+- Weekly Gateway re-auth needed no 2FA on paper.
+
+**Next:**
+- Spec 005: margin model. Fix both the rate and the shape, re-run all 13 pairs.
+- Then Telegram (heartbeat + dedup), then systemd.
+
+**Open questions / blockers:**
+- Paper vs live margin: the 1.11 reading is unconfirmed against a funded account.
+
 ### 2026-08-06 (spec 001: reconcile repo with docs/STRATEGY_SPEC.md)
 **Spec:** `specs/spec_001.md`
 

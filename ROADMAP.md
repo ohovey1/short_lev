@@ -72,6 +72,12 @@ what TWS shows, and a hand-forced delta drift produces the expected trip.
 `MaintMarginReq` logged side by side, so we finally know how far off the
 estimates are.
 
+## Phase 1b.5 -- margin model
+
+Spec: `specs/spec_005.md`. Live observation shows the modeled multiplier is both
+the wrong value and the wrong shape. Sizing depends on it, so it precedes
+alerting.
+
 ## Phase 1c -- Telegram sink
 
 - [ ] Decisions from 1b routed to Telegram. The monitor still never calls
@@ -140,6 +146,12 @@ makes the first of these much easier to calibrate.
 - **Auxiliary collateral sleeve** (BRK, GLD) to support the margin cushion.
   Scope-cut; changes the margin model materially.
 - automatic sizing on deposit — detect and alert only, see STRATEGY_SPEC section 1.
+- **Paper vs live margin.** The ~1.11 observed multiplier is a paper reading.
+  IBKR's paper engine may be more permissive. Confirm on a funded account before
+  any live sizing.
+- **Commission modelling.** ~$1/leg observed, ~4bp per rebalance at current
+  size. The backtest models zero. Decide whether to add it before or after the
+  band grid search -- it changes the optimal band width.
 
 ---
 

@@ -277,4 +277,98 @@ eventual seam spec has both cases written down.
 
 ## Result
 
-*(Fill in after the session. Include the actual IBKR-vs-modeled margin ratio.)*
+## Result
+
+All eleven gates passed, manually, against paper account DUQ985373 over
+2026-08-07 and 2026-08-10. Position: short 575 TSLL, long 28 TSLA, NLV ~$10,500.
+
+### Gates
+
+| Gate | Outcome |
+|---|---|
+| 1 connects | port 4002, `accounts=DUQ985373 (PAPER)` |
+| 2 target derived | `10000 x 0.75 / 1.60 = 4687.50`, verified by hand |
+| 3 legs read | `position=-575.0, marketValue=-4659.80` -> `short=4659.80` positive |
+| 4 bad position | closed TSLA leg -> `TSLL=held TSLA=MISSING`, kept polling, no crash |
+| 5 sanity check | `base_capital=50000` -> both warnings fired with correct diagnosis |
+| 6 trip | net delta +586.15 vs 468.75 threshold -> `long-short band`, acted on, resolved to -101.54 |
+| 7 target stable | identical across restarts, absent from state file |
+| 8 peak persists | restored, not reinitialised |
+| 9 disconnect | `pkill ibgateway` -> caught, backoff 10s->80s, reconnected unattended |
+| 10 freshness | values step on IBKR's ~3min push, not frozen |
+| 11 margin logged | every check |
+
+### The margin finding
+
+**This is the session's main output.** Observed ratio
+`ibkr_maint / (1.60 x short_notional)` across the session: **0.691 to 0.719**.
+
+Sample points:
+
+| long | short | ibkr_maint | modeled | ratio |
+|---|---|---|---|---|
+| 9871.25 | 4642.55 | 5342.81 | 7428.08 | 0.719 |
+| 9254.86 | 4678.20 | 5188.72 | 7485.12 | 0.693 |
+| 9222.36 | 4683.95 | 5180.59 | 7494.32 | 0.691 |
+| 9212.61 | 4672.45 | 5178.15 | 7475.92 | 0.693 |
+
+**Two distinct defects, not one.**
+
+**(a) Wrong rate.** The 1.60 multiplier was built as
+`0.50 x leverage + 0.30 x leverage` -- 50% on the single-stock long leg. That is
+the *initial* requirement. IBKR maintains long equity at 25%. Substituting:
+`0.25 x 2 + 0.60 = 1.10`, against an observed ~1.11. The discrepancy is
+explained, not mysterious.
+
+**(b) Wrong shape.** Row 1 above has the same short notional as the others but a
+ratio of 0.719 instead of ~0.692 -- because only the *long* leg had changed.
+`margin_multiplier x short_notional` is the correct formula evaluated **at zero
+net delta**; it assumes `long = leverage x short`, true at entry and false as
+soon as delta drifts. Fitting `maint = a*long + b*short` across the observations
+gives roughly `a ~ 0.285, b ~ 0.545` -- close to the 25%/60% the regulatory
+formula predicts, but derived from two noisy points and not to be trusted as
+constants.
+
+Consequence: `target = base_capital x 0.75 / 1.60` undersizes by ~31%, and by a
+*drifting* amount. Affects all 13 pairs, and the leaderboard ranking may move
+since multipliers differ per pair. Spec 005.
+
+**Caveat: this is a paper reading.** IBKR's paper margin engine may be more
+permissive than live. Confirm against a funded account before resizing anything.
+
+### Other findings
+
+- **Commissions are real and unmodelled.** ~$1.00-1.20 per leg regardless of
+  size. Establishing the position cost ~$5.09. On a $4,687 position that is
+  ~4bp per rebalance, against a strategy whose edge is basis points of drag. The
+  backtest models zero commission.
+- **Trade line arithmetic is inconsistent.**
+  `TSLA: SELL 2 shares @ ~327.84 = $586.15` -- 2 x 327.84 is $655.68. The dollar
+  figure is the exact requirement; the share count is that rounded. Three numbers
+  describing three different trades. Harmless here, costly during Phase 2
+  reconciliation.
+- **Trips fire even when the sanity check has declared the target
+  unachievable.** With `base_capital=50000`, the monitor warned the target was
+  unreachable and then recommended ~$56k of new exposure on a $10.5k account.
+  Both correct in isolation; contradictory together, and the trip is the last
+  thing on screen.
+- **Disconnect handling is right but loud.** A routine reconnect prints ~25 lines
+  of asyncio traceback. This path runs every night on the Gateway restart.
+- **Portfolio updates arrive on IBKR's ~3-minute push**, not on our poll.
+  Consecutive 60s cycles legitimately report identical values.
+- **Weekly re-auth took username and password only -- no 2FA.** Friday's session
+  expired Sunday 01:00 ET; Monday's login was a genuine fresh weekly auth. Paper
+  only; live will likely differ. If it holds, IBC could automate the weekly login
+  entirely.
+- **Gateway and Client Portal cannot share a login.** Manual trades require
+  stopping Gateway. Permanent operational constraint, matters in Phase 2.
+- **Paper trading disclaimer** must be accepted once in Gateway before the API
+  will serve position data (`Error 10141`).
+
+### Deviations
+
+- `readonly=True` added to `ib.connect()` after the first run triggered
+  Gateway's write-access popup. `ib_async` defaults to `readonly=False` and calls
+  `reqAutoOpenOrders` during setup. Added to Implementation notes.
+- `executions request timed out` still appears on every connect -- harmless under
+  read-only mode, adds ~4s to startup. Not suppressed.

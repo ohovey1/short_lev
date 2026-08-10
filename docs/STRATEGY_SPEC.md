@@ -165,6 +165,23 @@ until intraday checking is modeled.
   - single-stock underlying, 2x short: `0.50 x 2 + 0.60 = 1.60`
 - Capital utilization is deliberately held below 100% as a margin cushion
   against forced liquidation.
+  
+> **Open: the margin model is known to be wrong in two ways** (observed
+> 2026-08-10, paper account, TSLA/TSLL).
+>
+> **Rate.** The single-stock long-leg rate of 0.50 is the *initial* requirement;
+> IBKR maintains long equity at 25%. The corrected estimate for a 2x
+> single-stock pair is `0.25 x 2 + 0.60 = 1.10`, against an observed ~1.11. The
+> figures above are therefore conservative -- positions are undersized, not
+> under-margined.
+>
+> **Shape.** `margin_multiplier x short_notional` is this formula evaluated at
+> zero net delta. It assumes `long = leverage x short`, which holds at entry and
+> fails as delta drifts. Observed ratio moved from 0.691 to 0.719 with the short
+> leg unchanged and only the long leg altered.
+>
+> Both are unconfirmed against a live account and are not yet reflected in
+> `config.PAIRS`. See spec 005.
 
 ---
 

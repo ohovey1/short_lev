@@ -1,7 +1,11 @@
 # VPS Operations -- `short-lev-01`
 
 Reference for the box that runs IB Gateway and the short_lev monitor.
-Everything here was run and verified on 2026-08-06.
+Verified 2026-08-06 through 2026-08-10.
+
+Sections 1-7 are durable -- the box, access, Gateway, and the auth model do not
+change when systemd lands. **Section 8 onward describes the pre-systemd manual
+workflow and will be replaced in Phase 1d.**
 
 ---
 
@@ -12,28 +16,25 @@ Everything here was run and verified on 2026-08-06.
 | Provider | Hetzner Cloud, project `short-lev` |
 | Server name | `short-lev-01` |
 | Type | **CPX 11** -- 2 vCPU / 2 GB RAM / 40 GB disk |
-| Cost | ~$21/mo (~$20.49 server + $0.60 IPv4), billed hourly |
+| Cost | ~$21/mo, billed hourly |
 | Location | Ashburn, VA (us-east) |
 | OS | Ubuntu **22.04.5 LTS** |
 | Public IPv4 | `5.161.232.45` |
-| Public IPv6 | `2a01:4ff:f0:d253::1` |
 | Tailscale IPv4 | `100.123.221.44` |
 | Swap | 2 GB (`/swapfile`, persisted in `/etc/fstab`) |
 
 **On sizing.** CPX 21 (4 GB, ~$38/mo) is the conservative choice. CPX 11 + swap
 was taken instead because Gateway self-caps its heap at `-Xmx768m` and idles
-around 270 MB. Hetzner resizes up in ~5 minutes with no reinstall, and billing
-is hourly, so the downside of being wrong is small. **If Gateway starts thrashing
-or gets OOM-killed, resize rather than debugging.**
+around 270 MB. Hetzner resizes up in ~5 minutes with no reinstall. **If Gateway
+thrashes or is OOM-killed, resize rather than debugging.**
 
-**On location.** Ashburn matters for two reasons: latency to IBKR's US gateways,
-and avoiding a login from an unexpected country, which can trigger IBKR security
-review. Cost-optimised (CX) plans had no US stock at provisioning time, hence
-the pricier CPX line.
+**On location.** Ashburn matters for latency to IBKR's US gateways, and for
+avoiding a login from an unexpected country, which can trigger IBKR security
+review. Cost-optimised (CX) plans had no US stock at provisioning time.
 
 **Do not use ARM.** IBKR ships Gateway as x86 Linux only. Avoid Hetzner's CAX
-line and Raspberry Pi entirely -- ARM means unsupported jar extraction that
-breaks on Gateway's automatic updates.
+line and Raspberry Pi -- ARM means unsupported jar extraction that breaks on
+Gateway's automatic updates.
 
 ---
 
@@ -47,6 +48,10 @@ breaks on Gateway's automatic updates.
 
 The service account is deliberately separate from `owen` and from the `hype_arb`
 box entirely -- no shared blast radius between two trading systems.
+
+**Onboarding another operator:** give them their own admin user rather than
+sharing `owen`, so the audit trail distinguishes actions. They will also need a
+Tailscale invite and their own IBKR user under Users & Access Rights.
 
 ---
 
@@ -77,30 +82,27 @@ ssh short-lev                    # as owen
 sudo -u short-lev -i             # switch to the service account
 ```
 
-### Exit
+`exit` once to leave `short-lev`, again to close the session.
 
-`exit` once to leave `short-lev`, again to close the SSH session.
+### Common failures
 
-**Anything started from an SSH shell dies when that shell closes.** Use `tmux`
-for anything that must outlive the session, until the systemd units exist.
-
-### Common failure
-
-`Permission denied (publickey)` almost always means `~/.ssh/config` still says
-`User root`. Root login is disabled.
+- `Permission denied (publickey)` -- `~/.ssh/config` still says `User root`.
+  Root login is disabled.
+- Commands "disappearing" after `ssh`, `sudo -u`, or `source` -- these change
+  shell context, and anything pasted before the new prompt appears is swallowed.
+  **Send one command at a time and wait for each prompt.**
 
 ---
 
 ## 4. Security posture
 
-```bash
+```
 # /etc/ssh/sshd_config
 PermitRootLogin no
 PasswordAuthentication no
 ```
 
 ```bash
-# ufw
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow OpenSSH
@@ -108,14 +110,13 @@ ufw allow in on tailscale0
 ufw enable
 ```
 
-**Port 5900 (VNC) is deliberately not opened.** x11vnc binds to `-localhost`,
-so it is reachable only through an SSH tunnel. Two independent layers: the
-firewall and the bind address.
+**Port 5900 (VNC) is deliberately not opened.** x11vnc binds to `-localhost`, so
+it is reachable only through an SSH tunnel. Two independent layers: firewall and
+bind address.
 
-Also set: `timedatectl set-timezone America/New_York`. This is intentional --
-every operational question about this box concerns the 23:45 ET Gateway reset,
-the Sunday 01:00 ET re-auth, and market hours. Matching the clock removes a
-conversion from every debugging session.
+Timezone is `America/New_York`, intentionally -- every operational question about
+this box concerns the 23:45 ET Gateway reset, the Sunday 01:00 ET re-auth, and
+market hours.
 
 Unattended security upgrades are installed and enabled.
 
@@ -127,31 +128,44 @@ Needed whenever Gateway requires a human: weekly re-auth, or after a crash.
 
 **Client:** TigerVNC standalone (`vncviewer64-*.exe`, no install required).
 
-**Step 1 -- open the tunnel.** In its own terminal, left running:
+**Step 1 -- open the tunnel.** Its own terminal, left running:
 
 ```bash
 ssh -L 5900:localhost:5900 short-lev
 ```
 
-**Step 2 -- connect TigerVNC to:**
-
-```
-localhost:5900
-```
-
-**Not** the Tailscale IP -- x11vnc refuses connections on that interface by
-design. Accept the unencrypted-connection warning; SSH already encrypts the
-tunnel.
+**Step 2 -- connect TigerVNC to `localhost:5900`.** Not the Tailscale IP --
+x11vnc refuses connections on that interface by design. Accept the unencrypted
+warning; SSH already encrypts the tunnel.
 
 **Step 3 -- close the tunnel terminal when done.**
 
-If the VNC window is blank grey, press Left-Alt three times to force a repaint.
+Blank grey window: press Left-Alt three times to force a repaint.
+
+### Session collision
+
+**Gateway, TWS, and Client Portal cannot hold the same login simultaneously.**
+Client Portal refuses with *"the production username associated with this
+paper-trading username has an active session."*
+
+Manual trades therefore require stopping Gateway first:
+
+```bash
+pkill -f ibgateway                    # as short-lev
+# place trades via phone app or Client Portal
+DISPLAY=:10 ~/Jts/ibgateway &
+```
+
+The mobile app may hold a separate session -- untested. A second user on the
+account under Users & Access Rights would remove the constraint entirely, and is
+the better long-term fix since Phase 2 is explicitly manual execution.
 
 ### Alternative (not currently used)
 
-Binding x11vnc to the Tailscale IP directly (`-listen 100.123.221.44`) also
-works and skips the tunnel, but then any device on the tailnet can reach the
-Gateway screen with no password. The tunnel is preferred.
+Binding x11vnc to the Tailscale IP (`-listen 100.123.221.44`) skips the tunnel,
+but then any device on the tailnet reaches the Gateway screen with no password.
+Worth reconsidering **with a VNC password set** if a non-technical person ever
+has to perform the weekly login -- it reduces the ritual to opening one app.
 
 ---
 
@@ -160,7 +174,7 @@ Gateway screen with no password. The tunnel is preferred.
 **Version 10.45**, `stable` channel, installed as `short-lev` in
 `/home/short-lev/Jts`.
 
-### Install (already done -- for rebuilds)
+### Install (for rebuilds)
 
 ```bash
 sudo -u short-lev -i
@@ -170,44 +184,16 @@ chmod +x ibgateway-stable-standalone-linux-x64.sh
 ./ibgateway-stable-standalone-linux-x64.sh -q -dir ~/Jts
 ```
 
-`-q` runs unattended -- the installer itself needs no display. Use the
-**standalone** build; the regular installer requires a GUI.
+`-q` runs unattended -- the installer needs no display. Use the **standalone**
+build; the regular installer requires a GUI.
 
 Prefer `stable` over `latest`: fewer version bumps under a box meant to sit
 untouched, and IBC pins to a Gateway major version.
-
-### Start (manual)
-
-```bash
-Xvfb :10 -screen 0 1024x768x24 -nolisten tcp &
-sleep 2
-DISPLAY=:10 ~/Jts/ibgateway &
-sleep 15
-DISPLAY=:10 x11vnc -display :10 -localhost -nopw -forever &
-```
-
-The `sleep`s matter: Xvfb must exist before Gateway draws, and Gateway must
-render before x11vnc attaches.
 
 > **The executable is `~/Jts/ibgateway` -- a file, not a directory.**
 > The standalone build differs from the installer layout. The
 > `~/Jts/ibgateway/*/ibgateway` path in every online guide fails here with
 > `Not a directory`.
-
-### Stop
-
-```bash
-pkill -f ibgateway
-pkill x11vnc
-pkill Xvfb
-```
-
-### Check what is running
-
-```bash
-ps aux | grep -E "Xvfb|ibgateway|x11vnc" | grep -v grep
-free -h
-```
 
 ### Gateway settings (via VNC, Configure -> Settings)
 
@@ -224,16 +210,25 @@ free -h
 **Lock and Exit:** set **auto-restart**, not auto-logoff. This is what turns a
 daily login into a weekly one.
 
-Read-Only API stays ON for all of Phase 1b and 1c -- it makes "no order
-submission" a property of the broker rather than a promise in a spec.
+Read-Only API stays ON through Phase 1c -- it makes "no order submission" a
+property of the broker rather than a promise in a spec.
+
+### First-run gate
+
+The **paper trading disclaimer** must be accepted once before the API will serve
+position data. Until then the API connects and immediately drops with
+`Error 10141: Paper trading disclaimer must first be accepted for API
+connection`, followed by a misleading `Peer closed connection. clientId 11
+already in use?` -- ignore the second, fix the first. Accept it under
+Configure -> Settings -> API -> Precautions.
 
 ---
 
 ## 7. Authentication model
 
-There are **no IBKR credentials anywhere in this repo or on this box's disk.**
-Gateway holds the authenticated session; the API socket on localhost requires no
-authentication at all. `.env` carries connection coordinates only.
+**There are no IBKR credentials in this repo or on this box's disk.** Gateway
+holds the authenticated session; the API socket on localhost requires no
+authentication. `.env` carries connection coordinates only.
 
 | Event | Frequency | Human needed |
 |---|---|---|
@@ -245,20 +240,23 @@ authentication at all. `.env` carries connection coordinates only.
 The weekly window falls Sunday morning with markets closed until Monday 09:30 --
 roughly 32 hours of slack.
 
-**Observed 2026-08-06:** paper login required username and password only, no
-2FA. One data point; do not generalise. The live account will differ, and the
-Sunday expiry is the real test.
+**Observed 2026-08-10:** the first login after the Sunday 01:00 ET expiry -- a
+genuine weekly re-auth -- required username and password only, **no 2FA**. Two
+consecutive paper logins now with no second factor. If this holds, IBC could
+automate the weekly login entirely and VNC becomes exception-only. **Do not plan
+around it for live**, where IB Key is likely enforced.
 
 If push notifications are unreliable, Gateway's challenge/response mode is more
 dependable -- it displays a challenge number, entered into IBKR Mobile's IB Key,
 and the response typed back. No dependence on notification delivery.
 
-**Only one session per credential.** Gateway on the VPS and Gateway or TWS on
-the laptop cannot both be logged in. Opening TWS will disconnect the box.
+**Only one session per credential** -- see Session collision above.
 
 ---
 
-## 8. Application layout
+## 8. Running things (pre-systemd -- will be replaced in Phase 1d)
+
+### Layout
 
 ```
 /opt/short_lev/                  repo, owned by short-lev
@@ -268,26 +266,70 @@ the laptop cannot both be logged in. Opening TWS will disconnect the box.
 /home/short-lev/.local/bin/uv    uv, installed per-user
 ```
 
-> **Known issue:** the state directory currently sits inside the git checkout. A
-> re-clone would wipe `peak_equity` and silently disable the drawdown stop. Move
-> it outside the repo tree before this runs unattended.
+> **Known issue:** the state directory sits inside the git checkout. A re-clone
+> would wipe `peak_equity` and silently disable the drawdown stop. Move it
+> outside the repo tree before this runs unattended.
 
-### `.env` on this box
+### `.env`
 
 ```
 POLYGON_API_KEY=<set>
 IB_HOST=127.0.0.1
 IB_PORT=4002
 IB_CLIENT_ID=11
-IB_ACCOUNT=DUXXXXXXX
+IB_ACCOUNT=DU<redacted>
 MONITOR_BASE_CAPITAL=10000
 MONITOR_STATE_PATH=/opt/short_lev/data/state/monitor.json
 POLL_INTERVAL_SECONDS=900
 ```
 
-`IB_PORT` is the only thing separating paper from live. `IB_CLIENT_ID=11` is
-deliberately not 0 or 1 -- every example script uses those, and a collision with
-a half-dead session fails the connect.
+`IB_PORT` is the only thing separating paper from live -- the monitor logs port
+and account on every startup for this reason. `IB_CLIENT_ID=11` is deliberately
+not 0 or 1; every example script uses those, and a collision with a half-dead
+session fails the connect.
+
+### tmux convention
+
+The Gateway stack runs in a tmux session named `gw`, owned by `short-lev`.
+
+```bash
+sudo -u short-lev -i
+tmux attach -t gw          # or: tmux new -s gw
+# ... start or inspect ...
+# Ctrl-B then D to detach
+```
+
+**Anything started outside tmux dies when the SSH session closes.** tmux sessions
+are per-user -- `tmux ls` as `owen` will not show `short-lev`'s sessions -- and a
+reboot destroys them.
+
+### Start the Gateway stack
+
+Inside tmux:
+
+```bash
+Xvfb :10 -screen 0 1024x768x24 -nolisten tcp &
+sleep 2
+DISPLAY=:10 ~/Jts/ibgateway &
+sleep 15
+DISPLAY=:10 x11vnc -display :10 -localhost -nopw -forever &
+```
+
+The `sleep`s matter: Xvfb must exist before Gateway draws, and Gateway must
+render before x11vnc attaches. Confirm x11vnc reports `PORT=5900` -- if a stale
+instance holds it, x11vnc silently auto-probes to 5901 and the tunnel will not
+match.
+
+### Check and stop
+
+```bash
+ps aux | grep -E "Xvfb|ibgateway|x11vnc" | grep -v grep
+free -h
+
+pkill -f ibgateway
+pkill x11vnc
+pkill Xvfb
+```
 
 ### Run the monitor
 
@@ -300,7 +342,6 @@ uv run python src/monitor.py
 ### Deploy an update
 
 ```bash
-sudo -u short-lev -i
 cd /opt/short_lev
 git pull --ff-only
 uv sync
@@ -309,13 +350,14 @@ uv sync
 Deliberately **not** wired to auto-deploy on push. Restarting interrupts monitor
 state continuity, so deploys are a chosen action, ideally outside market hours.
 No GitHub Actions, no deploy key, and specifically no `NOPASSWD: ALL` sudoers
-entry.
+entry -- that pattern exists on the `hype_arb` box and should not be copied here.
 
 ---
 
 ## 9. Rebuilding from scratch
 
-Ordered. Each step assumes the previous completed.
+Ordered. **Do not paste as a block** -- anything following `ssh`, `sudo -u`, or
+`source` is swallowed by a shell that has not started yet.
 
 ```bash
 # 1. Hetzner console: CPX 11, Ashburn, Ubuntu 22.04, SSH key added AT CREATION.
@@ -347,7 +389,7 @@ ufw default deny incoming && ufw default allow outgoing
 ufw allow OpenSSH && ufw enable
 timedatectl set-timezone America/New_York
 
-# 8. Tailscale -- before anything else, everything after is easier with it
+# 8. Tailscale -- before anything else; everything after is easier with it
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up --ssh          # blocks: open the printed URL, authenticate, wait
 ufw allow in on tailscale0
@@ -355,7 +397,7 @@ tailscale ip -4
 
 # 9. Display stack + JRE
 apt update
-apt install -y xvfb x11vnc openjdk-17-jre unattended-upgrades
+apt install -y xvfb x11vnc openjdk-17-jre unattended-upgrades tmux
 
 # 10. Service user
 adduser --disabled-password --gecos "" short-lev
@@ -372,11 +414,8 @@ mkdir -p /opt/short_lev/data/state
 nano /opt/short_lev/.env && chmod 600 /opt/short_lev/.env
 
 # 12. Update ~/.ssh/config locally: User root -> User owen
+# 13. Log into Gateway over VNC, accept the paper disclaimer, set API options
 ```
-
-**Do not paste this as a block.** Anything following `ssh`, `sudo -u`, or
-`source` will be swallowed by the shell that has not started yet. One command at
-a time, waiting for each prompt.
 
 ---
 
@@ -384,9 +423,10 @@ a time, waiting for each prompt.
 
 - **systemd units.** Gateway (needs `DISPLAY`, cannot use
   `ProtectHome=read-only` since it writes to `~/Jts`, `RestartSec=30` so a
-  failing 2FA login is not hammered), monitor, dashboard. Until these exist,
-  nothing survives an SSH disconnect.
-- **IBC** for automated credential entry on restart.
+  failing login is not hammered), monitor, dashboard. Until these exist, nothing
+  survives an SSH disconnect. This replaces section 8.
+- **IBC** for automated credential entry on restart. The 2026-08-10 no-2FA
+  observation suggests this could cover the weekly login on paper.
 - **Dashboard**, Tailscale-bound (`--server.address=$(tailscale ip -4)`), no
   public port and no reverse proxy.
 - **State file relocation** out of the repo tree.
