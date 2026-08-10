@@ -1,0 +1,52 @@
+# IBC configuration TEMPLATE. Committed. Credential fields are BLANK and stay
+# blank in this file -- it lives in the repo.
+#
+# On the box:
+#
+#   sudo install -d -o short-lev -g short-lev -m 700 /var/lib/short-lev/ibc
+#   sudo cp deploy/ibc-config.ini.template /var/lib/short-lev/ibc/config.ini
+#   sudo chown short-lev:short-lev /var/lib/short-lev/ibc/config.ini
+#   sudo chmod 600 /var/lib/short-lev/ibc/config.ini
+#   sudo -u short-lev nano /var/lib/short-lev/ibc/config.ini   # fill in the two
+#
+# THE FILLED-IN FILE CONTAINS THE IBKR PASSWORD IN PLAINTEXT. That is what IBC
+# needs to type it into Gateway's login dialog. It belongs at 600, owned by
+# short-lev, under /var/lib -- never in the repo, never in a backup that leaves
+# the box. Until this landed the machine held zero credentials; that property is
+# being traded for unattended restarts. Have that conversation again before this
+# runs on an account you do not own.
+#
+# IBC CANNOT APPROVE 2FA. Paper logins have required none across three
+# observations, including a genuine post-expiry weekly re-auth. Do not assume it
+# holds for live, where IB Key is likely enforced.
+
+# --- Credentials: fill in ON THE BOX, never here -----------------------------
+IbLoginId=
+IbPassword=
+
+# paper or live. The other half of the paper/live split is IB_PORT in .env
+# (4002 paper, 4001 live). Both must agree.
+TradingMode=paper
+
+# --- Gateway location --------------------------------------------------------
+# Pinned rather than auto-detected: IBC picks the highest installed version
+# otherwise, so an auto-update to a version Gateway has not been logged into
+# silently changes what starts.
+IbDir=/home/short-lev/Jts
+IbGatewayVersionMajor=1045
+
+# --- Restart behaviour -------------------------------------------------------
+# Soft-restart nightly WITHOUT re-authentication, which is the whole point: IBKR
+# resets sessions around 23:45 ET and this gets ahead of it. The monitor rides
+# the gap out on its reconnect backoff and logs one INFO on recovery.
+AutoRestartTime=11:45 PM
+
+# Never close down on its own -- systemd owns the process lifecycle. If Gateway
+# exits, the unit restarts it (RestartSec=30) and IBC logs back in.
+IbAutoClosedown=no
+
+# Accept the read-only-API and paper-trading dialogs that otherwise block the
+# API socket until someone clicks them over VNC. This is the gate that produced
+# "Error 10141: paper trading disclaimer must first be accepted".
+AcceptNonBrokerageAccountWarning=yes
+ReadOnlyLogin=no
