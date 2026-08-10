@@ -277,8 +277,6 @@ eventual seam spec has both cases written down.
 
 ## Result
 
-## Result
-
 All eleven gates passed, manually, against paper account DUQ985373 over
 2026-08-07 and 2026-08-10. Position: short 575 TSLL, long 28 TSLA, NLV ~$10,500.
 
