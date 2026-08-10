@@ -123,6 +123,10 @@ re-clone that wipes the file resets the peak and silently disables the drawdown 
 A malformed state file makes the monitor exit loudly rather than reinitialize, for
 the same reason.
 
+On the VPS all three runtime paths live in `/var/lib/short-lev`, created by the
+monitor unit's `StateDirectory=`: `MONITOR_STATE_PATH`, `ALERT_STATE_PATH`, and
+`EVENT_LOG_DIR`. See `docs/VPS.md` section 8.
+
 ### What the monitor deliberately does not do
 
 - **Submit orders.** Not now, not behind a flag.
@@ -197,10 +201,20 @@ a reason to stop watching a live position.
 
 ### Heartbeat, and its limitation
 
-Once per day at `HEARTBEAT_HOUR` (default 09:45 local, just after the open) the
-monitor sends an INFO summary: pair, state, target, cushion, checks completed
-since the last heartbeat, and whether anything is tripped. It fires on the first
-poll after that time, so it can be up to one poll interval late.
+Once per day at `HEARTBEAT_HOUR` (default 09:45, just after the open) the monitor
+sends an INFO summary: pair, state, target, cushion, checks completed since the
+last heartbeat, and whether anything is tripped.
+
+**Always ET**, whatever timezone the box runs. The 09:45 default is an ET fact —
+on a UTC box the old local-time version fired at an arbitrary hour with no error
+and no clue why.
+
+It fires once inside a **30-minute window** starting at that time, not on the
+first poll after it. Open-ended meant any restart later in the day sent one
+immediately (observed at 15:24 and again at 15:57 with the hour set to 09:45),
+and a heartbeat arriving at an arbitrary time cannot do its job. Past the window
+it skips the day rather than firing late: a missing heartbeat is the signal, and
+a late one only adds noise to it.
 
 **This is a heartbeat you must notice missing.** If the monitor dies at 02:00 on
 Tuesday you find out at 09:45 — the process cannot tell you it died, so silence

@@ -3,9 +3,10 @@
 Reference for the box that runs IB Gateway and the short_lev monitor.
 Verified 2026-08-06 through 2026-08-10.
 
-Sections 1-7 are durable -- the box, access, Gateway, and the auth model do not
-change when systemd lands. **Section 8 onward describes the pre-systemd manual
-workflow and will be replaced in Phase 1d.**
+Sections 1-7 are durable -- the box, access, Gateway, and the auth model. Section
+8 onward was rewritten in Phase 1d (spec 007) when systemd and IBC landed: the
+stack now runs as four units and survives a reboot unattended. tmux is no longer
+part of normal operation.
 
 ---
 
@@ -226,9 +227,15 @@ Configure -> Settings -> API -> Precautions.
 
 ## 7. Authentication model
 
-**There are no IBKR credentials in this repo or on this box's disk.** Gateway
-holds the authenticated session; the API socket on localhost requires no
-authentication. `.env` carries connection coordinates only.
+**There are no IBKR credentials in this repo.** Gateway holds the authenticated
+session; the API socket on localhost requires no authentication. `.env` carries
+connection coordinates only.
+
+**This box's disk is a different matter since IBC landed.** IBC needs the
+password in plaintext to type it into the login dialog, so it lives at
+`/var/lib/short-lev/ibc/config.ini`, `600`, owned by `short-lev`. That is a
+changed security posture, deliberately traded for unattended restarts -- see
+section 8.
 
 | Event | Frequency | Human needed |
 |---|---|---|
@@ -254,21 +261,62 @@ and the response typed back. No dependence on notification delivery.
 
 ---
 
-## 8. Running things (pre-systemd -- will be replaced in Phase 1d)
+## 8. Running things (systemd)
+
+Four units, all enabled, all surviving a reboot. **tmux was the old approach** --
+everything ran in a session named `gw` and died with the SSH connection, and
+nothing came back after a reboot. It is gone from normal operation; if you have
+an older copy of this doc, that is what changed.
+
+### The units
+
+| Unit | What it is | Depends on |
+|---|---|---|
+| `short-lev-xvfb` | virtual display `:10` | — |
+| `short-lev-gateway` | IB Gateway, logged in by IBC | xvfb |
+| `short-lev-vnc` | x11vnc on `:10`, loopback only | xvfb |
+| `short-lev-monitor` | the band monitor | gateway (ordering only) |
+
+```bash
+systemctl status short-lev-monitor
+sudo systemctl restart short-lev-monitor
+journalctl -u short-lev-monitor -f          # follow
+journalctl -u short-lev-monitor --since today
+journalctl -u short-lev-gateway -b          # this boot
+```
+
+**VNC is its own unit on purpose.** It attaches to the display, not to Gateway,
+so `systemctl restart short-lev-vnc` leaves Gateway logged in and the monitor
+connected. Folding it into the Gateway unit would mean a dead VNC forces a
+Gateway logout -- the exact failure this setup exists to avoid.
+
+**`After=` is ordering, not readiness.** systemd starts the monitor as soon as
+Gateway's *process* exists, which is well before Gateway is logged in and
+answering on 4002. The monitor's connect backoff handles that gap: one WARNING
+per retry, doubling from 10s to a 300s ceiling, never exits. A boot journal
+showing a few `connect failed: ... retrying in 10s` lines followed by
+`connected:` is the system working, not a fault.
 
 ### Layout
 
 ```
 /opt/short_lev/                  repo, owned by short-lev
 /opt/short_lev/.env              chmod 600, never committed, never deployed
-/opt/short_lev/data/state/       monitor state (peak_equity)
+/var/lib/short-lev/              monitor state -- OUTSIDE the repo
+/var/lib/short-lev/monitor.json      peak_equity
+/var/lib/short-lev/alert_state.json  alert dedup + last heartbeat date
+/var/lib/short-lev/events/           checks.jsonl, alerts.jsonl
+/var/lib/short-lev/ibc/config.ini    IBC credentials, 600
 /home/short-lev/Jts/             Gateway install and its settings
+/opt/ibc/                        IBC install
 /home/short-lev/.local/bin/uv    uv, installed per-user
 ```
 
-> **Known issue:** the state directory sits inside the git checkout. A re-clone
-> would wipe `peak_equity` and silently disable the drawdown stop. Move it
-> outside the repo tree before this runs unattended.
+State lives in `/var/lib/short-lev` because it used to live in the checkout,
+where a re-clone or a destructive pull wiped `peak_equity` and **silently
+disabled the drawdown stop** -- a failure with no symptom. The monitor unit's
+`StateDirectory=short-lev` creates and chowns the directory, so there is no
+`mkdir` step.
 
 ### `.env`
 
@@ -279,8 +327,16 @@ IB_PORT=4002
 IB_CLIENT_ID=11
 IB_ACCOUNT=DU<redacted>
 MONITOR_BASE_CAPITAL=10000
-MONITOR_STATE_PATH=/opt/short_lev/data/state/monitor.json
 POLL_INTERVAL_SECONDS=900
+
+MONITOR_STATE_PATH=/var/lib/short-lev/monitor.json
+ALERT_STATE_PATH=/var/lib/short-lev/alert_state.json
+EVENT_LOG_DIR=/var/lib/short-lev/events
+
+TELEGRAM_BOT_TOKEN=<set>
+TELEGRAM_CHAT_ID=<set>
+ALERT_REPEAT_MINUTES=60
+HEARTBEAT_HOUR=09:45
 ```
 
 `IB_PORT` is the only thing separating paper from live -- the monitor logs port
@@ -288,69 +344,61 @@ and account on every startup for this reason. `IB_CLIENT_ID=11` is deliberately
 not 0 or 1; every example script uses those, and a collision with a half-dead
 session fails the connect.
 
-### tmux convention
+`HEARTBEAT_HOUR` is **always read in ET**, whatever the box's timezone. It fires
+once inside a 30-minute window starting at that time, so a restart at 15:24 sends
+nothing -- a heartbeat at an arbitrary hour cannot tell you anything, because you
+can only notice silence if you know when to expect noise.
 
-The Gateway stack runs in a tmux session named `gw`, owned by `short-lev`.
+The bot token is a full credential. `.env` stays at `600` and is never committed
+and never deployed from a laptop.
 
-```bash
-sudo -u short-lev -i
-tmux attach -t gw          # or: tmux new -s gw
-# ... start or inspect ...
-# Ctrl-B then D to detach
-```
+### IBC and the credential
 
-**Anything started outside tmux dies when the SSH session closes.** tmux sessions
-are per-user -- `tmux ls` as `owen` will not show `short-lev`'s sessions -- and a
-reboot destroys them.
+> **This box now holds an IBKR password.** `/var/lib/short-lev/ibc/config.ini`,
+> `600`, owned by `short-lev`. IBC needs it in plaintext to type it into
+> Gateway's login dialog, which is what makes an unattended reboot possible.
+>
+> Until Phase 1d this machine held **zero** credentials (section 7). That
+> property was traded, deliberately, for restarts that need no human. It never
+> goes in the repo and never goes in a backup that leaves the box.
+>
+> **Have this conversation again before running on an account you do not own.**
 
-### Start the Gateway stack
+`deploy/ibc-config.ini.template` is the committed template, credential fields
+blank. `install-units.sh` seeds it and never overwrites an existing one.
 
-Inside tmux:
+**IBC cannot approve 2FA.** Paper logins have required none across three
+observations, including a genuine post-expiry weekly re-auth, so paper is
+hands-off. Do not assume that holds for live, where IB Key is likely enforced --
+if it is, the weekly login needs VNC and section 5 is how you get there.
 
-```bash
-Xvfb :10 -screen 0 1024x768x24 -nolisten tcp &
-sleep 2
-DISPLAY=:10 ~/Jts/ibgateway &
-sleep 15
-DISPLAY=:10 x11vnc -display :10 -localhost -nopw -forever &
-```
+Gateway soft-restarts nightly at IBC's `AutoRestartTime` (11:45 PM) without
+re-authenticating, getting ahead of IBKR's own ~23:45 ET session reset. The
+monitor rides the gap out on its backoff and logs one INFO on recovery.
 
-The `sleep`s matter: Xvfb must exist before Gateway draws, and Gateway must
-render before x11vnc attaches. Confirm x11vnc reports `PORT=5900` -- if a stale
-instance holds it, x11vnc silently auto-probes to 5901 and the tunnel will not
-match.
-
-### Check and stop
-
-```bash
-ps aux | grep -E "Xvfb|ibgateway|x11vnc" | grep -v grep
-free -h
-
-pkill -f ibgateway
-pkill x11vnc
-pkill Xvfb
-```
-
-### Run the monitor
+### Install or reinstall the units
 
 ```bash
-sudo -u short-lev -i
 cd /opt/short_lev
-uv run python src/monitor.py
+sudo deploy/install-units.sh
 ```
+
+Idempotent: copies the four units, `daemon-reload`s, enables all four, and
+creates `/var/lib/short-lev`. It never touches an IBC config that already exists.
 
 ### Deploy an update
 
 ```bash
-cd /opt/short_lev
-git pull --ff-only
-uv sync
+ssh short-lev-01 'sudo -u short-lev /opt/short_lev/deploy/deploy.sh'
 ```
 
-Deliberately **not** wired to auto-deploy on push. Restarting interrupts monitor
-state continuity, so deploys are a chosen action, ideally outside market hours.
-No GitHub Actions, no deploy key, and specifically no `NOPASSWD: ALL` sudoers
-entry -- that pattern exists on the `hype_arb` box and should not be copied here.
+`git pull --ff-only` plus `uv sync`, then **it stops**. It prints the restart
+command rather than running it, because restarting interrupts monitor continuity
+-- so it stays a chosen action, ideally outside market hours.
+
+Deliberately **not** wired to auto-deploy on push. No GitHub Actions, no deploy
+key, and specifically no `NOPASSWD: ALL` sudoers entry -- that pattern exists on
+the `hype_arb` box and should not be copied here.
 
 ---
 
@@ -395,40 +443,57 @@ tailscale up --ssh          # blocks: open the printed URL, authenticate, wait
 ufw allow in on tailscale0
 tailscale ip -4
 
-# 9. Display stack + JRE
+# 9. Display stack + JRE. No tmux: the stack runs under systemd (section 8).
 apt update
-apt install -y xvfb x11vnc openjdk-17-jre unattended-upgrades tmux
+apt install -y xvfb x11vnc openjdk-17-jre unattended-upgrades
 
 # 10. Service user
 adduser --disabled-password --gecos "" short-lev
 mkdir -p /opt/short_lev && chown short-lev:short-lev /opt/short_lev
 
 # 11. As short-lev: Gateway (section 6), then repo
+#     No mkdir for state -- StateDirectory= creates /var/lib/short-lev.
 sudo -u short-lev -i
 cd /opt/short_lev
 git clone https://github.com/ohovey1/short_lev.git .
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.bashrc
 uv sync
-mkdir -p /opt/short_lev/data/state
 nano /opt/short_lev/.env && chmod 600 /opt/short_lev/.env
+exit
 
-# 12. Update ~/.ssh/config locally: User root -> User owen
-# 13. Log into Gateway over VNC, accept the paper disclaimer, set API options
+# 12. IBC, as root. Check the current release rather than assuming this URL.
+mkdir -p /opt/ibc && cd /opt/ibc
+curl -LO https://github.com/IbcAlpha/IBC/releases/latest/download/IBCLinux-3.20.0.zip
+unzip IBCLinux-3.20.0.zip && chmod +x *.sh scripts/*.sh
+chown -R short-lev:short-lev /opt/ibc
+
+# 13. Units + IBC config. Seeds /var/lib/short-lev/ibc/config.ini from the
+#     template with BLANK credentials; fill them in on the box only.
+cd /opt/short_lev && ./deploy/install-units.sh
+sudo -u short-lev nano /var/lib/short-lev/ibc/config.ini    # IbLoginId, IbPassword
+systemctl start short-lev-xvfb short-lev-gateway short-lev-vnc
+
+# 14. Update ~/.ssh/config locally: User root -> User owen
+# 15. Over VNC: confirm IBC logged Gateway in, accept the paper disclaimer,
+#     set API options (section 6). Then start the monitor:
+systemctl start short-lev-monitor && journalctl -u short-lev-monitor -f
 ```
 
 ---
 
 ## 10. Not yet built
 
-- **systemd units.** Gateway (needs `DISPLAY`, cannot use
-  `ProtectHome=read-only` since it writes to `~/Jts`, `RestartSec=30` so a
-  failing login is not hammered), monitor, dashboard. Until these exist, nothing
-  survives an SSH disconnect. This replaces section 8.
-- **IBC** for automated credential entry on restart. The 2026-08-10 no-2FA
-  observation suggests this could cover the weekly login on paper.
-- **Dashboard**, Tailscale-bound (`--server.address=$(tailscale ip -4)`), no
-  public port and no reverse proxy.
-- **State file relocation** out of the repo tree.
-- **Backups** -- `peak_equity` is small and irreplaceable. Nightly tar to
-  `data/backups/`, optional rsync to a Hetzner Storage Box, 30-day retention.
+Spec 007 shipped the systemd units, IBC, and the state relocation. What remains:
+
+- **Dashboard unit**, Tailscale-bound (`--server.address=$(tailscale ip -4)`), no
+  public port and no reverse proxy. Deliberately deferred: `app.py` is still a
+  backtest UI with no live data, so running it as a service would serve an empty
+  page. It becomes the right stakeholder surface once it reads live state.
+- **Backups** -- `peak_equity` is small and irreplaceable, and now that it lives
+  in `/var/lib/short-lev` it is outside anything git would restore. Nightly tar,
+  optional rsync to a Hetzner Storage Box, 30-day retention.
+- **Inbound Telegram commands.** Its own spec.
+- **External dead-man.** The heartbeat is one you must notice *missing*; if the
+  monitor dies at 02:00 you find out at 09:45. Acceptable while nothing executes,
+  not acceptable once an executor exists.
