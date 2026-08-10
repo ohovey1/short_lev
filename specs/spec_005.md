@@ -286,3 +286,21 @@ behaviour, not a regression.
 Spec 004's caveat still stands: these are **paper** observations. IBKR's paper
 margin engine may be more permissive than live. Confirm against a funded
 account before resizing anything real.
+
+### Live confirmation (2026-08-10, paper)
+
+Deployed to the VPS and observed against IBKR directly:
+
+| long | short | ibkr_maint | modeled | ratio |
+|---|---|---|---|---|
+| 9222.76 | 4683.95 | 5180.69 | 5116.06 | 1.013 |
+| 13825.33 | 6808.16 | 7641.33 | 7541.23 | 1.013 |
+
+The second row follows a resize to the corrected target -- a 45% increase in
+short notional and 50% in long. **The residual is unchanged at 1.3%**, which
+distinguishes a fixed house add-on from a mis-stated rate. Matches the backtest
+residual range exactly.
+
+Cushion at the corrected target: $2,854 on $10,494 equity (27%), against $5,319
+under the old undersized position. This is what 0.75 utilisation actually
+consumes -- relevant to the deferred question of whether 0.75 is still right.
