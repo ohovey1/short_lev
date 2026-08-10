@@ -254,4 +254,71 @@ Its own spec, once outbound is proven in daily use.
 
 ## Result
 
-*(Fill in after the session.)*
+**Offline gates pass. Live gates (2, 5, 6, 7, 9) not yet run -- they need IB
+Gateway and a real bot token, and are the operator's to execute.**
+
+### What shipped
+
+All eight items. Three new modules (`src/events.py`, `src/notify.py`,
+`src/alert_state.py`), `src/monitor.py` rewired, `.env.example` and
+`docs/AUTOMATION.md` updated, six new offline checks in `verify_monitor.py`.
+
+### Gate status
+
+| # | Gate | Status |
+|---|---|---|
+| 1 | Unconfigured is a clean no-op | PASS (check m) |
+| 2 | Trip delivers | **Not run** -- needs Gateway + bot |
+| 3 | Trade line arithmetic self-consistent | PASS (check k) |
+| 4 | Dedup holds | PASS offline (checks n, n2); not run live |
+| 5 | Resolution sends once | PASS offline (check n); not run live |
+| 6 | Delivery failure recorded, not fatal | **Not run** -- needs a bad token live |
+| 7 | Suppression works | PASS offline (smoke + check n2); not run live |
+| 8 | Escaping holds | PASS (check l) |
+| 9 | Disconnect is quiet | **Not run** -- needs `pkill -f ibgateway` |
+| 10 | Checks are logged | PASS (smoke: 7/7 rows including all non-trips) |
+| 11 | verify_* pass, `hash_band.py` unchanged | **PASS** |
+
+Gate 11 in full: `verify_band.py`, `verify_engine.py`, `verify_monitor.py` all
+pass, and the `hash_band.py` GRAND digest is
+`08baa20ac842502aedbb5f647f6ea24cf3128429f17f4a5a1d7d1d0cb85de942`, identical to
+`baseline_005_hash.txt`. Captured before the first edit and re-checked after the
+last. Nothing reached into shared code -- `band.py`, `decision.py`, `engine.py`,
+`config.py`, `broker.py`, and `monitor_state.py` are untouched.
+
+### Deviations from the spec
+
+- **`ALERT_STATE_PATH` added**, not named in item 8. The spec fixes the dedup
+  file at `data/state/alert_state.json`; that is the default, but the path is
+  overridable for the same reason `MONITOR_STATE_PATH` is -- and the offline
+  checks need to write to a temp directory.
+- **`HEARTBEAT_HOUR` accepts `HH:MM`**, not just an hour. The spec's default is
+  09:45, which a bare hour cannot express.
+- **Heartbeat is local time, not ET.** No timezone dependency was added for a
+  purely informational message; noted in `.env.example` and AUTOMATION.md. The
+  deploy box runs ET.
+- **`record_trigger()` written, then removed.** See the bug below.
+
+### Bug found during the session
+
+The first wiring of item 2 let the suppressed band trigger and the sanity key
+alternate in the single `last_trigger` slot. Every cycle then looked like a
+transition, and the sanity warning sent **four times in seven cycles** instead of
+once per repeat window -- the exact alert fatigue item 6 exists to prevent, and
+invisible to a unit test of `should_send()` alone. Found by driving `run()`
+against a fake IB.
+
+Fix: while suppressed, the sanity key owns the dedup slot outright and the band
+trigger is never recorded. Lifting the suppression then reads as a fresh trip,
+which is correct -- it is the first one that was ever actionable. Regression
+check `n2` covers it.
+
+### Deferred, deliberately
+
+- **Inbound commands** (`/status`, `/positions`) -- unchanged from the spec's
+  closing note; needs its own spec once outbound is proven in daily use.
+- **External dead-man** for the heartbeat. The known limitation is documented in
+  AUTOMATION.md rather than solved: this is a heartbeat you must notice
+  *missing*. Required before an executor exists, not before.
+- **Multi-pair.** `PAIR_KEY` is still the hardcoded `"TSLL"`.
+- The live gates above.
