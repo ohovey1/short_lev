@@ -161,12 +161,10 @@ def log_check(state, d, prices):
     if d.trigger is None:
         return
 
-    pair = config.PAIRS[PAIR_KEY]
     log.warning("TRIP: %s%s", d.trigger, " (TERMINAL)" if d.terminal else "")
-    _log_trade(pair["leveraged_ticker"], state.short_notional,
-               d.new_short_notional, prices, short_leg=True)
-    _log_trade(pair["underlying_ticker"], state.long_notional,
-               d.new_long_notional, prices, short_leg=False)
+    for line in trade_lines(state, d, prices):
+        for part in line.split("\n"):
+            log.warning("  %s", part)
 
     if d.trigger == "margin de-risk":
         log.warning(
@@ -178,15 +176,23 @@ def log_check(state, d, prices):
         )
 
 
-def _log_trade(ticker, current_notional, new_notional, prices, short_leg):
-    """Log the specific trade, in shares -- 'buy 43 TSLA', not 'resize long leg'.
+def format_trade_line(ticker, current_notional, new_notional, price, short_leg):
+    """Return the trade to place, in shares -- 'buy 43 TSLA', not 'resize long leg'.
 
-    The point is being able to act without opening TWS.
+    Returns a string (possibly two lines) rather than logging, because the same
+    text goes to the console and to Telegram. One definition, two consumers --
+    the same seam reasoning as decision.evaluate().
+
+    Every dollar figure derives from the ROUNDED share count. The prior version
+    printed three numbers describing three different trades: the exact dollar
+    requirement, the share count rounded from it, and a landing notional that
+    assumed the exact figure was traded. You cannot reconcile a fill against
+    that. The residual against the requested size is shown instead of being
+    papered over -- it is expected and small, but it must be visible.
     """
     delta = new_notional - current_notional
     if abs(delta) < 0.005:
-        log.warning("  %s: no change (%.2f)", ticker, current_notional)
-        return
+        return f"{ticker}: no change ({current_notional:,.2f})"
 
     # For the short leg, a notional INCREASE means shorting more, i.e. selling.
     if short_leg:
@@ -194,22 +200,47 @@ def _log_trade(ticker, current_notional, new_notional, prices, short_leg):
     else:
         action = "BUY" if delta > 0 else "SELL"
 
-    price = prices.get(ticker)
     if not price:
-        log.warning(
-            "  %s: %s $%.2f notional (%.2f -> %.2f). No price available, so no "
-            "share count.",
-            ticker, action, abs(delta), current_notional, new_notional,
+        return (
+            f"{ticker}: {action} ${abs(delta):,.2f} notional "
+            f"({current_notional:,.2f} -> {new_notional:,.2f}). "
+            "No price available, so no share count."
         )
-        return
 
-    shares = abs(delta) / price
-    log.warning(
-        "  %s: %s %.0f shares @ ~%.2f = $%.2f (%.2f -> %.2f)",
-        ticker, action, shares, price, abs(delta), current_notional, new_notional,
+    shares = round(abs(delta) / price)
+    if shares == 0:
+        # Sub-one-share requirement. Saying "0 shares @ ~329.38 = $0.00" reads
+        # as an actionable trade; it is not one.
+        return (
+            f"{ticker}: no trade -- ${abs(delta):,.2f} at ~{price:,.2f} rounds "
+            f"to 0 shares ({current_notional:,.2f}, target {new_notional:,.2f})"
+        )
+
+    amount = shares * price
+    landing = current_notional + (amount if delta > 0 else -amount)
+    residual = landing - new_notional
+
+    return (
+        f"{ticker}: {action} {shares:,d} shares @ ~{price:,.2f} = ${amount:,.2f}\n"
+        f"      {current_notional:,.2f} -> {landing:,.2f}  "
+        f"(target {new_notional:,.2f}, residual {residual:+,.2f})"
     )
 
 
+def trade_lines(state, d, prices):
+    """Both legs' trade lines for a tripped decision, short leg first."""
+    pair = config.PAIRS[PAIR_KEY]
+    lev, und = pair["leveraged_ticker"], pair["underlying_ticker"]
+    return [
+        format_trade_line(lev, state.short_notional, d.new_short_notional,
+                          prices.get(lev), short_leg=True),
+        format_trade_line(und, state.long_notional, d.new_long_notional,
+                          prices.get(und), short_leg=False),
+    ]
+
+
+# Severity per event, straight from the spec's table. Trips are WARNING; the
+# two that mean the position is already in trouble are CRITICAL.
 def run():
     raw_capital = os.environ.get("MONITOR_BASE_CAPITAL")
     if raw_capital in (None, ""):
