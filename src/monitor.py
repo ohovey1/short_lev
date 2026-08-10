@@ -36,6 +36,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from ib_async import IB
@@ -53,6 +54,12 @@ load_dotenv()
 log = logging.getLogger("monitor")
 
 PAIR_KEY = "TSLL"
+
+# All alert timing runs on ET, not on whatever zone the box is set to.
+# HEARTBEAT_HOUR defaults to 09:45 because that is just after the market open --
+# an ET fact. On a UTC box the naive-local version fired at an arbitrary hour
+# with no error and no clue why. zoneinfo is stdlib; there is no dependency cost.
+ET = ZoneInfo("America/New_York")
 
 # One tolerance for all three startup comparisons. These WARN and never refuse:
 # an operator who knows the position is mid-adjustment still needs the monitor
@@ -84,9 +91,9 @@ def _env_bool(name, default):
 def _heartbeat_time():
     """(hour, minute) from HEARTBEAT_HOUR. Accepts "09:45" or "9".
 
-    Interpreted in the machine's local timezone. The deploy target runs on ET;
-    a box on another zone should set the clock or the hour accordingly, which
-    is noted in .env.example rather than solved with a tz dependency.
+    Interpreted in ET, regardless of the box's timezone -- see the ET constant
+    above. The heartbeat fires only inside a window that starts at this time
+    (alert_state.HEARTBEAT_WINDOW_MINUTES), not on the first poll after it.
     """
     raw = (os.environ.get("HEARTBEAT_HOUR") or "").strip()
     if not raw:
@@ -359,7 +366,8 @@ def trip_message(state, d, prices):
 
 def heartbeat_message(state, d, checks_since):
     return "\n".join([
-        f"monitoring {PAIR_KEY}, {checks_since} checks since last heartbeat",
+        f"monitoring {PAIR_KEY}, {checks_since} "
+        f"check{'' if checks_since == 1 else 's'} since last heartbeat",
         f"short {state.short_notional:,.2f} / target {state.target:,.2f}",
         f"long {state.long_notional:,.2f} | net delta {d.net_delta:+,.2f}",
         f"cushion {d.margin_cushion:+,.2f} (equity {state.account_equity:,.2f})",
@@ -579,7 +587,7 @@ def run():
             events.log_check(check_record(state, d, unactionable))
             checks_since_heartbeat += 1
 
-            now = datetime.datetime.now()
+            now = datetime.datetime.now(ET)
 
             if s.capital_exceeds_nlv:
                 # While suppressed the sanity warning OWNS the dedup slot. The

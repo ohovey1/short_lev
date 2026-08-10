@@ -33,6 +33,8 @@ Spec 007 adds:
   q. The INITIAL connect retries with backoff instead of exiting -- otherwise
      systemd crash-loops the monitor on every boot while Gateway is still coming
      up.
+  r. The heartbeat fires only inside its window, in ET, and a naive timestamp
+     written before the tz switch does not raise on comparison.
 """
 
 import datetime
@@ -558,12 +560,61 @@ def check_q():
                      f"{expected_sleeps})")
 
 
+def check_r():
+    """Spec 007 item 2. The heartbeat fires only inside its window.
+
+    The old condition was open-ended: past HH:MM with none recorded today sent
+    one immediately, so ANY restart later in the day produced a heartbeat.
+    Observed at 15:24 and again at 15:57 with the hour set to 09:45. A heartbeat
+    at an arbitrary time cannot do its job -- you can only notice silence if you
+    know when to expect noise.
+
+    Also covers the tz migration: `now` is ET-aware now, and a last_sent_ts
+    written naive before the switch must not raise on comparison.
+    """
+    et = monitor.ET
+    day = dict(alert_state.EMPTY)
+
+    def due(h, m, state=None):
+        now = datetime.datetime(2026, 8, 10, h, m, tzinfo=et)
+        return alert_state.heartbeat_due(state if state is not None else day,
+                                         now, 9, 45)
+
+    before = due(9, 30)                 # before the hour -> no
+    inside = due(9, 46)                 # inside the window -> yes
+    edge = due(10, 14)                  # 29 min past, still inside -> yes
+    past = due(10, 30)                  # 45 min past -> missed, wait for tomorrow
+    restart = due(15, 24)               # the observed bug -> must be silent
+
+    sent = alert_state.record_heartbeat(dict(alert_state.EMPTY),
+                                        datetime.datetime(2026, 8, 10, 9, 46, tzinfo=et))
+    again = due(9, 50, sent)            # already sent today -> no
+
+    # Naive timestamp from before the ET switch, compared against aware `now`.
+    legacy = dict(alert_state.EMPTY)
+    legacy["last_trigger"] = "long-short band"
+    legacy["last_sent_ts"] = "2026-08-10T09:00:00"          # no offset
+    try:
+        alert_state.should_send(legacy, "long-short band",
+                                datetime.datetime(2026, 8, 10, 10, 30, tzinfo=et), 60)
+        tz_ok = True
+    except TypeError:
+        tz_ok = False
+
+    ok = (not before and inside and edge and not past and not restart
+          and not again and tz_ok)
+    return check("r. the heartbeat fires only inside its ET window",
+                 ok, f"09:30={before} 09:46={inside} 10:14={edge} 10:30={past} "
+                     f"15:24={restart} already-sent={again}, "
+                     f"naive ts compares without raising={tz_ok}")
+
+
 def main():
     results = [
         check_a(), check_b(), check_c(), check_d(), check_e(),
         check_f(), check_g(), check_h(), check_i(), check_j(),
         check_k(), check_l(), check_m(), check_n(), check_n2(),
-        check_o(), check_p(), check_q(),
+        check_o(), check_p(), check_q(), check_r(),
     ]
     print("=" * 60)
     if all(results):

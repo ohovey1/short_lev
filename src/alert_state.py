@@ -24,8 +24,18 @@ import datetime
 import json
 import logging
 import os
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger(__name__)
+
+# The monitor's clock. HEARTBEAT_HOUR's default is 09:45 because that is just
+# after the market open, which is an ET fact -- not a fact about whatever zone
+# the box happens to be set to.
+ET = ZoneInfo("America/New_York")
+
+# How long after HH:MM a heartbeat may still be sent. Comfortably more than the
+# 15-minute poll interval, so a normal cycle always lands inside it.
+HEARTBEAT_WINDOW_MINUTES = 30
 
 DEFAULT_ALERT_STATE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "data", "state", "alert_state.json"
@@ -80,6 +90,29 @@ def _parse(ts):
         return None
 
 
+def _match_awareness(parsed, now):
+    """Make a stored timestamp comparable to `now`, in whichever direction.
+
+    The monitor's `now` is ET-aware, but state files written before that switch
+    hold naive timestamps, and comparing the two raises TypeError -- which the
+    monitor's catch-all turns into a backoff loop that never clears until
+    someone deletes the file. A dedup ledger must never be able to do that.
+
+    Coerced against `now` rather than unconditionally to ET, so this is correct
+    in both directions: an aware `now` pulls a naive timestamp up to ET, and a
+    naive `now` (tests, or any caller that has not switched) drops an aware one
+    back down. Assuming ET for a naive value is safe -- the box that wrote it ran
+    ET, and an hour's error in a repeat timer costs one duplicate message.
+    """
+    if parsed is None:
+        return None
+    if now.tzinfo is not None and parsed.tzinfo is None:
+        return parsed.replace(tzinfo=ET)
+    if now.tzinfo is None and parsed.tzinfo is not None:
+        return parsed.astimezone(ET).replace(tzinfo=None)
+    return parsed
+
+
 def should_send(state, trigger, now, repeat_minutes):
     """Decide whether this trigger warrants a message right now.
 
@@ -99,7 +132,7 @@ def should_send(state, trigger, now, repeat_minutes):
         # Transition in, or a change of trigger. New information either way.
         return True, "trip"
 
-    last_sent = _parse(state.get("last_sent_ts"))
+    last_sent = _match_awareness(_parse(state.get("last_sent_ts")), now)
     if last_sent is None:
         return True, "trip"
 
@@ -115,9 +148,22 @@ def record_sent(state, trigger, now):
     return updated
 
 
-def heartbeat_due(state, now, hour, minute):
-    """True when today's heartbeat has not been sent and the time has passed."""
-    if now.hour < hour or (now.hour == hour and now.minute < minute):
+def heartbeat_due(state, now, hour, minute, window_minutes=HEARTBEAT_WINDOW_MINUTES):
+    """True only inside the window starting at HH:MM, at most once per day.
+
+    The window is the point. "Past the hour and none sent today" is open-ended,
+    so ANY restart later in the day sends one immediately -- observed at 15:24
+    and again at 15:57 with the hour set to 09:45. A heartbeat arriving at an
+    arbitrary time cannot do its job: you can only notice silence if you know
+    when to expect noise.
+
+    Past the window, skip today rather than fire late. A missing heartbeat is
+    the signal; a late one just adds noise to it.
+    """
+    due = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now < due:
+        return False
+    if (now - due).total_seconds() > window_minutes * 60:
         return False
     return state.get("last_heartbeat_date") != now.date().isoformat()
 
