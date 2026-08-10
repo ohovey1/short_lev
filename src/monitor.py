@@ -33,6 +33,7 @@ and it applies to the poll interval AND to every wait in the reconnect backoff.
 import logging
 import os
 import sys
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
@@ -54,6 +55,19 @@ SANITY_TOLERANCE = 0.10
 
 RECONNECT_BACKOFF_START = 10
 RECONNECT_BACKOFF_MAX = 300
+
+
+
+def _env_float(name, default):
+    raw = os.environ.get(name)
+    return float(raw) if raw not in (None, "") else default
+
+
+def _env_bool(name, default):
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 def _env_float(name, default):
@@ -98,42 +112,83 @@ def derive_target(base_capital, params, pair):
     return (base_capital * params.capital_utilization) / config.margin_multiplier(pair)
 
 
-def startup_sanity_check(base_capital, target, state):
-    """Warn loudly on configuration that does not describe this account.
+@dataclass(frozen=True)
+class Sanity:
+    """Whether the configuration describes this account. Three advisory checks.
 
-    Three checks, all advisory. None refuses to run.
+    capital_exceeds_nlv is the only one that gates anything: a target derived
+    from more capital than the account holds is unachievable, so a trip
+    recommending the resize contradicts the warning printed above it. The other
+    two produce entirely actionable trips -- an undeployed deposit and a
+    position opened at a different size both want a real trade.
+    """
+    capital_exceeds_nlv: bool
+    nlv_exceeds_capital: bool
+    notional_off_target: bool
+    messages: tuple
+
+
+def sanity_flags(base_capital, target, state):
+    """Pure: evaluate the three sanity conditions. No logging, no I/O.
+
+    Called every cycle so suppression tracks the current account rather than
+    whatever was true at startup -- if NLV recovers above base_capital, the
+    suppression must lift without a restart.
     """
     nlv = state.account_equity
+    messages = []
 
-    if base_capital > nlv * (1 + SANITY_TOLERANCE):
-        log.warning(
-            "SANITY: base_capital %.2f exceeds NLV %.2f by more than %.0f%%. The "
-            "derived target %.2f is unachievable -- the position will be "
-            "oversized, cushion thin, and margin de-risk will fire repeatedly "
-            "against a reference that can never be met.",
-            base_capital, nlv, SANITY_TOLERANCE * 100, target,
+    capital_exceeds_nlv = base_capital > nlv * (1 + SANITY_TOLERANCE)
+    if capital_exceeds_nlv:
+        messages.append(
+            f"base_capital {base_capital:,.2f} exceeds NLV {nlv:,.2f} by more "
+            f"than {SANITY_TOLERANCE * 100:.0f}%. The derived target "
+            f"{target:,.2f} is unachievable -- the position will be oversized, "
+            "cushion thin, and margin de-risk will fire repeatedly against a "
+            "reference that can never be met. Band trips are suppressed while "
+            "this holds: acting on them would add exposure the account cannot "
+            "carry."
         )
 
-    if nlv > base_capital * (1 + SANITY_TOLERANCE):
-        log.warning(
-            "SANITY: NLV %.2f exceeds base_capital %.2f by more than %.0f%% -- "
-            "likely an undeployed deposit. Taking NO sizing action: raising "
-            "base_capital is a human decision (STRATEGY_SPEC section 1). "
-            "Derived target remains %.2f.",
-            nlv, base_capital, SANITY_TOLERANCE * 100, target,
+    nlv_exceeds_capital = nlv > base_capital * (1 + SANITY_TOLERANCE)
+    if nlv_exceeds_capital:
+        messages.append(
+            f"NLV {nlv:,.2f} exceeds base_capital {base_capital:,.2f} by more "
+            f"than {SANITY_TOLERANCE * 100:.0f}% -- likely an undeployed "
+            "deposit. Taking NO sizing action: raising base_capital is a human "
+            f"decision (STRATEGY_SPEC section 1). Derived target remains "
+            f"{target:,.2f}."
         )
 
     # Arithmetically identical to the foil decay band, but a different
     # diagnosis. The band says "time to trade"; this says "your config may not
-    # describe this account". Logged separately so the first check of a session
-    # does not read as a spurious trip.
-    if abs(state.short_notional - target) > SANITY_TOLERANCE * target:
-        log.warning(
-            "SANITY: short notional %.2f is more than %.0f%% from derived target "
-            "%.2f. Either base_capital is wrong or the position was opened at a "
-            "different size. This is a config warning, not a band trip.",
-            state.short_notional, SANITY_TOLERANCE * 100, target,
+    # describe this account". Reported separately so the first check of a
+    # session does not read as a spurious trip.
+    notional_off_target = abs(state.short_notional - target) > SANITY_TOLERANCE * target
+    if notional_off_target:
+        messages.append(
+            f"short notional {state.short_notional:,.2f} is more than "
+            f"{SANITY_TOLERANCE * 100:.0f}% from derived target {target:,.2f}. "
+            "Either base_capital is wrong or the position was opened at a "
+            "different size. This is a config warning, not a band trip."
         )
+
+    return Sanity(
+        capital_exceeds_nlv=capital_exceeds_nlv,
+        nlv_exceeds_capital=nlv_exceeds_capital,
+        notional_off_target=notional_off_target,
+        messages=tuple(messages),
+    )
+
+
+def log_startup_sanity(s):
+    """Console output for the sanity checks -- once per process, at startup.
+
+    sanity_flags() runs every cycle to keep suppression current; this prints
+    once so the terminal does not gain a repeating wall of warnings.
+    """
+    for message in s.messages:
+        log.warning("SANITY: %s", message)
 
     log.info(
         "note: the startup foil-decay verdict is vacuous -- drift from a "
@@ -143,7 +198,7 @@ def startup_sanity_check(base_capital, target, state):
     )
 
 
-def log_check(state, d, prices):
+def log_check(state, d, prices, unactionable=False):
     """Log every check, tripped or not.
 
     Non-trips matter as much as trips: this log is the raw material for
@@ -161,7 +216,10 @@ def log_check(state, d, prices):
     if d.trigger is None:
         return
 
-    log.warning("TRIP: %s%s", d.trigger, " (TERMINAL)" if d.terminal else "")
+    log.warning(
+        "TRIP: %s%s%s", d.trigger, " (TERMINAL)" if d.terminal else "",
+        " (UNACTIONABLE -- target unachievable, not alerted)" if unactionable else "",
+    )
     for line in trade_lines(state, d, prices):
         for part in line.split("\n"):
             log.warning("  %s", part)
@@ -320,12 +378,24 @@ def run():
                 ib.sleep(poll_seconds)
                 continue
 
+            # Evaluated EVERY cycle, so suppression tracks the current account.
+            # Console output stays once-only -- see log_startup_sanity.
+            s = sanity_flags(base_capital, target, state)
             if not checked_sanity:
-                startup_sanity_check(base_capital, target, state)
+                log_startup_sanity(s)
                 checked_sanity = True
 
             d = decision.evaluate(state, params)
-            log_check(state, d, broker.leg_prices(ib, PAIR_KEY))
+
+            # A trip recommending new exposure directly below a warning that the
+            # target is unachievable is two correct statements that contradict
+            # each other. The trip is real, so it is still evaluated and logged
+            # -- but it is not something you can act on. Not sending it is spec
+            # 006 item 2; the sink that would send it arrives in the next commit.
+            unactionable = d.trigger is not None and s.capital_exceeds_nlv
+
+            log_check(state, d, broker.leg_prices(ib, PAIR_KEY),
+                      unactionable=unactionable)
 
             if d.terminal:
                 # A drawdown stop is terminal in the backtest: the run ends. Here
