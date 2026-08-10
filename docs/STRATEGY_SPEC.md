@@ -25,9 +25,12 @@ target = (base_capital x capital_utilization) / margin_multiplier
 long_leg = leverage x target
 ```
 
-`margin_multiplier` is per-pair and lives in `config.PAIRS`. It is a
-regulatory-formula estimate, not a confirmed IBKR house number -- confirm via a
-TWS what-if order before sizing any live position.
+`margin_multiplier` is **derived, never stored**: `config.PAIRS` holds a
+per-pair `long_rate` and `short_rate`, and `config.margin_multiplier(pair)`
+computes `long_rate x leverage + short_rate`. One source of truth, so the
+sizing denominator and the margin measurement (section 3) cannot drift apart.
+These are regulatory-formula estimates, not confirmed IBKR house numbers --
+confirm via a TWS what-if order before sizing any live position.
 
 ### Target derivation and `base_capital`
 
@@ -158,72 +161,94 @@ until intraday checking is modeled.
   collateral per dollar of notional than a 2x fund.
 - Long and short legs are margined independently. There is no hedge netting
   below Portfolio Margin thresholds ($110,000 NLV plus options approval).
-- Each pair carries a `margin_multiplier` reflecting the combined collateral
-  requirement of both legs:
-  - broad/sector-ETF underlying, 3x short: `0.25 x 3 + 0.90 = 1.65`
-  - broad/sector-ETF underlying, 2x short: `0.25 x 2 + 0.60 = 1.10`
-  - single-stock underlying, 2x short: `0.50 x 2 + 0.60 = 1.60`
+- **Margin is a function of both legs**, not of the short leg alone:
+
+  ```
+  margin_required = long_rate x long_notional + short_rate x short_notional
+  ```
+
+  Rates are **maintenance**, not initial. Initial requirements gate the opening
+  trade; maintenance is what an open position is marked to day to day, and
+  therefore what sizing must run against.
+
+  | Pair type | long_rate | short_rate | derived multiplier |
+  |---|---|---|---|
+  | broad/sector-ETF underlying, 3x short | 0.25 | 0.90 | `0.25 x 3 + 0.90 = 1.65` |
+  | broad/sector-ETF underlying, 2x short | 0.25 | 0.60 | `0.25 x 2 + 0.60 = 1.10` |
+  | single-stock underlying, 2x short | 0.25 | 0.60 | `0.25 x 2 + 0.60 = 1.10` |
+
+  Single-stock pairs carry the same rates as 2x ETF pairs. At maintenance the
+  long leg is 25% either way; the 0.50 that used to appear here was the Reg T
+  *initial* rate and was simply wrong for this purpose.
+
+- `margin_multiplier` is that formula collapsed at zero net delta, where
+  `long = leverage x short`. That identity holds at entry and immediately after
+  any reset -- which is exactly when sizing happens -- so the single-valued form
+  is valid for **sizing** and invalid for **measuring** a drifted position.
 - Capital utilization is deliberately held below 100% as a margin cushion
   against forced liquidation.
-  
-> **Open: the margin model is known to be wrong in two ways** (observed
-> 2026-08-10, paper account, TSLA/TSLL).
+
+> **Validation** (spec 005, against four paper observations from spec 004,
+> TSLA/TSLL). The corrected formula predicts IBKR's `MaintMarginReq` to within
+> 1.25%-1.67% on all four, all residuals the same sign -- consistent with a
+> small house add-on above the regulatory minimum. The rates come from the
+> regulatory formula and were **not fitted** to these points; two noisy paper
+> observations cannot support fitted constants.
 >
-> **Rate.** The single-stock long-leg rate of 0.50 is the *initial* requirement;
-> IBKR maintains long equity at 25%. The corrected estimate for a 2x
-> single-stock pair is `0.25 x 2 + 0.60 = 1.10`, against an observed ~1.11. The
-> figures above are therefore conservative -- positions are undersized, not
-> under-margined.
->
-> **Shape.** `margin_multiplier x short_notional` is this formula evaluated at
-> zero net delta. It assumes `long = leverage x short`, which holds at entry and
-> fails as delta drifts. Observed ratio moved from 0.691 to 0.719 with the short
-> leg unchanged and only the long leg altered.
->
-> Both are unconfirmed against a live account and are not yet reflected in
-> `config.PAIRS`. See spec 005.
+> IBKR applies house requirements above the regulatory minimum on volatile
+> names and can raise them without notice. These remain estimates -- better
+> ones. Paper margin may also be more permissive than live; confirm against a
+> funded account before resizing anything.
 
 ---
 
 ## 4. Worked example
 
-**Setup.** TSLA / TSLL (2x). `base_capital` = $10,000, `margin_multiplier` =
-1.60, `capital_utilization` = 0.75.
+**Setup.** TSLA / TSLL (2x). `base_capital` = $10,000, `capital_utilization` =
+0.75. `long_rate` = 0.25, `short_rate` = 0.60, so the derived
+`margin_multiplier` = `0.25 x 2 + 0.60` = 1.10.
 
 ```
-target   = (10,000 x 0.75) / 1.60 = $4,687.50
-long_leg = 2 x 4,687.50           = $9,375.00
+target   = (10,000 x 0.75) / 1.10 = $6,818.18
+long_leg = 2 x 6,818.18           = $13,636.36
 ```
 
-**Entry:** short $4,687.50 TSLL, long $9,375.00 TSLA, net delta = $0.
+**Entry:** short $6,818.18 TSLL, long $13,636.36 TSLA, net delta = $0.
+
+Margin at entry, both ways (they agree only because delta is zero):
+
+```
+two-term:  0.25 x 13,636.36 + 0.60 x 6,818.18 = $7,500.00
+collapsed: 1.10 x 6,818.18                    = $7,500.00
+```
 
 Band thresholds at this target:
 
 | Band | Threshold | Trips when |
 |---|---|---|
-| Foil Decay (10%) | $468.75 | `short_notional` outside $4,218.75 - $5,156.25 |
-| Long-Short (10%) | $468.75 | `abs(net_delta)` exceeds $468.75 |
+| Foil Decay (10%) | $681.82 | `short_notional` outside $6,136.36 - $7,500.00 |
+| Long-Short (10%) | $681.82 | `abs(net_delta)` exceeds $681.82 |
 
 ### Scenario 1 -- Long-Short Band triggered
 
 | Field | Value |
 |---|---|
-| Short TSLL notional | $4,850 (within Foil Decay band) |
-| Net delta | +$520 (band breached) |
+| Short TSLL notional | $7,050 (within Foil Decay band) |
+| Net delta | +$750 (band breached, threshold $681.82) |
 | Trigger | Long-Short Band |
-| Action | Resize long TSLA leg only, to $9,700 |
-| Short leg | Unchanged at $4,850 |
+| Action | Resize long TSLA leg only, to $14,100 |
+| Short leg | Unchanged at $7,050 |
 | Resulting state | Net delta = 0; short notional unchanged |
 
 ### Scenario 2 -- Foil Decay Band triggered
 
 | Field | Value |
 |---|---|
-| Short TSLL notional | $5,300 (drifted >10% from $4,687.50) |
+| Short TSLL notional | $7,600 (drifted >10% from $6,818.18) |
 | Trigger | Foil Decay Band |
 | Action | Reset **both legs** to target |
-| Short leg | Back to $4,687.50 |
-| Long leg | Back to $9,375.00 |
+| Short leg | Back to $6,818.18 |
+| Long leg | Back to $13,636.36 |
 | Resulting state | Net delta = 0; both legs at fresh target |
 
 ### Scenario 3 -- Margin de-risk
@@ -233,8 +258,8 @@ Band thresholds at this target:
 | Equity | $8,400 (down from $10,000) |
 | Margin cushion | Negative |
 | Trigger | Margin de-risk |
-| Action | Recompute target from current equity: `(8,400 x 0.75) / 1.60 = $3,937.50` |
-| Resulting state | Short $3,937.50, long $7,875.00, net delta = 0, cushion restored |
+| Action | Recompute target from current equity: `(8,400 x 0.75) / 1.10 = $5,727.27` |
+| Resulting state | Short $5,727.27, long $11,454.55, net delta = 0, cushion restored |
 
 ### Scenario 4 -- Kill switch / drawdown stop
 
@@ -252,7 +277,7 @@ Band thresholds at this target:
 | Event | $10,000 deposited; NLV now ~$20,000, `base_capital` still $10,000 |
 | Automated action | **None.** Alert on the divergence only. |
 | Human action | Decide whether to run the larger size; if yes, set `base_capital` to $20,000 |
-| Resulting state | Target becomes $9,375. Short notional is now ~50% below target, so the next check trips the Foil Decay Band and recommends the resize through normal band logic. |
+| Resulting state | Target becomes $13,636.36. Short notional is now ~50% below target, so the next check trips the Foil Decay Band and recommends the resize through normal band logic. |
 
 ---
 

@@ -9,10 +9,11 @@
 | **long_short_band** | % threshold on net delta vs. `target`. Trip it → resize the long leg only; short stays put. |
 | **leverage (L)** | The LETF's stated multiple (e.g. 2 for TSLL). Long leg = `L × target` when hedged. |
 | **base_capital** | Cash figure fed into the backtest. Denominates `pct_return`; divided by `margin_multiplier` to get `target`. |
-| **margin multiplier** | How much cash a given short notional actually requires (≈1.6x for TSLA/TSLL, pair-dependent). Lives in `config.PAIRS[...]["margin_multiplier"]`. |
+| **margin multiplier** | How much cash a given short notional requires *at zero net delta* (1.10 for TSLA/TSLL, 1.65 for the 3x ETF pairs). **Derived, not stored:** `config.margin_multiplier(pair)` = `long_rate × leverage + short_rate`. Used for sizing only — see *margin required*. |
+| **long_rate / short_rate** | Per-leg **maintenance** margin rates in `config.PAIRS`. 0.25 on any long leg (ETF or single stock); 0.30 × leverage on the short leg. Maintenance, never initial: initial gates the opening trade, maintenance is what an open position is marked to. |
 | **borrow cost** | Daily charge on short notional at the pair's borrow rate — the real cost that eats into decay P&L. |
 | **breakeven borrow rate** | The annualized borrow rate at which gross decay P&L would be fully consumed by borrow. Used to rank pairs. |
-| **margin required** | `margin_multiplier × short_notional` — the cash the short leg's *current* size actually requires, day by day (not just at entry). |
+| **margin required** | `long_rate × long_notional + short_rate × short_notional` — a function of **both** legs, day by day (not just at entry). It collapses to `margin_multiplier × short_notional` only when the position is delta-neutral, which is why the collapsed form is safe for sizing and wrong for measuring a drifted position. |
 | **margin cushion** | `equity − margin_required`. Negative means a real account backing this position would be under a margin call at that size. A live trigger, not an observation: a negative cushion fires the margin de-risk rule, which resets both legs to a target recomputed from current equity. |
 | **drawdown stop** | Terminal exit: when account equity falls `drawdown_stop` (default 0.10) below its running peak, both legs close and the run stays flat for the rest of the window. No re-entry. |
 | **margin de-risk** | Partial reset fired by a negative margin cushion. `target` is recomputed from current equity and ratchets **down only** — it never grows back as equity recovers. |

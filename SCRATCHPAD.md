@@ -5,6 +5,50 @@ archive the rest to `docs/history/` (see `docs/history/scratchpad-2026-06.md`).
 
 ---
 
+### 2026-08-10 (spec 005: margin model -- fixed the rate and the shape)
+
+**Spec:** `specs/spec_005.md`
+
+**Shipped:**
+- `config.PAIRS` now carries `long_rate`/`short_rate`; `margin_multiplier` is
+  derived via `config.margin_multiplier(pair)` and stored nowhere.
+- `margin_required` is two-term (`long_rate*long + short_rate*short`) at both
+  `band.py` sites, in `broker.py`'s comparison log, and in the docs.
+- Single-stock multiplier 1.60 -> 1.10; their targets grew 45.5%.
+- All 6 gates passed. New GRAND `08baa20a...`, recorded in
+  `baseline_005_hash.txt` (003's file kept -- spec 003 references it by name).
+
+**Surprised us:**
+- **All 13 pair digests moved, not just the 3 single-stock ones.** The plan
+  expected only NVDL/TSLL/CONL. Attributed, not waved through: the *shape* fix
+  alone moves all 13 (it changes `margin_required` -> `margin_cushion` for
+  every pair), and the *rate* fix additionally moves the 3. Proof: TQQQ's
+  `cu1.00-noclose` arm changed digest with trade count fixed at 125, and that
+  arm has de-risk off, so only the recorded series could have moved.
+- The corrected model measures *less* margin off-neutral, so de-risk counts
+  fell everywhere (TQQQ 108 -> 90 at cu=1.0) and breach-days at cu=1.00 went
+  38-203 -> 20-200. Positions were being de-risked partly on a modelling error.
+- `verify_band` check_a hit a genuine one-ulp knife edge: at cu=1.0 entry
+  cushion is zero by construction, and the two-term sum lands on
+  1000.0000000000001, tipping `equity < margin_required`. Fixed in the fixture
+  (it was never meant to test the margin rule). Confirmed fixture-specific --
+  at base_capital=10000 all 13 pairs land on exactly 10000.0.
+- Leaderboard moved: NVDL 10th -> 5th, TSLL 3rd -> 2nd. CONL holds 1st.
+
+**Next:**
+- **Revisit `capital_utilization`.** Deliberately untouched this session (0.75
+  was calibrated against the old numbers). Headroom now looks larger than it
+  did: zero breach-days at 0.75 across all 13 pairs even with the bigger
+  single-stock targets. Fresh breach counts are in spec 005's Result.
+- Then Telegram (heartbeat + dedup), then systemd.
+
+**Open questions / blockers:**
+- Still paper-only. The 1.10 estimate carries a consistent +1.25-1.67% residual
+  against IBKR's actual, which reads as a house add-on. Unconfirmed on a funded
+  account -- do not resize anything live on this.
+- Any open paper position was opened at the old target; the monitor's sanity
+  check will warn until it is resized. Expected, not a regression.
+
 ### 2026-08-10 (spec 004: monitor core, gates passed on paper)
 
 **Spec:** `specs/spec_004.md`

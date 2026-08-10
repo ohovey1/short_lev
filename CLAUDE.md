@@ -71,7 +71,9 @@ or treat its output as a live-trading projection.
 ## Pairing
 Static registry in `config.py`: a dict keyed by the **leveraged ticker** (not the underlying —
 two pairs can share an underlying, e.g. TQQQ and QLD both on QQQ) → `{leveraged_ticker,
-underlying_ticker, leverage, borrow_rate_annual, live, margin_multiplier}`. Adding a pair =
+underlying_ticker, leverage, borrow_rate_annual, live, long_rate, short_rate}`
+(`margin_multiplier` is derived via `config.margin_multiplier(pair)`, never stored).
+Adding a pair =
 editing the dict. No discovery algorithm.
 
 ## Scope cuts (be explicit, don't sneak these in)

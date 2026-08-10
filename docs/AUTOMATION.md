@@ -100,6 +100,10 @@ never in response to price, P&L, or account value.
 target = (base_capital * capital_utilization) / margin_multiplier
 ```
 
+where `margin_multiplier` is derived per cycle via `config.margin_multiplier(pair)`
+(= `long_rate * leverage + short_rate`), never stored. The startup log prints the
+multiplier and the two rates it came from.
+
 Deriving `target` from live account value instead would make the reference drift
 with P&L, so `abs(short_notional - target)` never accumulates and the foil decay
 band silently never fires — while looking like it works. Full argument in

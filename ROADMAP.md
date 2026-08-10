@@ -72,11 +72,18 @@ what TWS shows, and a hand-forced delta drift produces the expected trip.
 `MaintMarginReq` logged side by side, so we finally know how far off the
 estimates are.
 
-## Phase 1b.5 -- margin model
+## Phase 1b.5 -- margin model  [SHIPPED 2026-08-10]
 
-Spec: `specs/spec_005.md`. Live observation shows the modeled multiplier is both
-the wrong value and the wrong shape. Sizing depends on it, so it precedes
-alerting.
+Spec: `specs/spec_005.md`. Live observation showed the modeled multiplier was
+both the wrong value and the wrong shape. Sizing depends on it, so it preceded
+alerting. Both fixed: rates are now per-leg and maintenance-based,
+`margin_required` is two-term, and `margin_multiplier` is derived rather than
+stored. Single-stock targets grew 45.5%; the leaderboard moved.
+
+**Open, deferred out of spec 005 on purpose:** `capital_utilization` = 0.75 was
+calibrated against the *old* margin numbers and has not been revisited. Fresh
+breach-day counts at 0.75 and 1.00 are in spec 005's Result and are the input
+to that decision.
 
 ## Phase 1c -- Telegram sink
 

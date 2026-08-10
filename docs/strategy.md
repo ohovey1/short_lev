@@ -56,9 +56,13 @@ At most one of these -- or one band -- fires on any given day.
 
 **Margin multiplier and capital utilization.** Shorting a leveraged ETF and holding
 the offsetting long both require margin collateral, and the two legs aren't netted
-below Portfolio Margin thresholds -- `margin_multiplier` is a fixed, per-pair number
-(set in the pair registry, not a sidebar control) for how much cash a dollar of short
-notional actually ties up. `capital_utilization` (a sidebar slider, default 0.75) is
+below Portfolio Margin thresholds. Margin required is a function of both legs,
+`long_rate * long_notional + short_rate * short_notional`, with per-leg maintenance
+rates set in the pair registry (not a sidebar control). `margin_multiplier` is that
+formula collapsed at zero net delta -- how much cash a dollar of short notional ties
+up while the position is neutral -- and is derived from the two rates rather than
+stored, which is what the target formula above divides by.
+`capital_utilization` (a sidebar slider, default 0.75) is
 the fraction of base capital actually deployed as margin; the rest is deliberate
 slack, kept as headroom against a margin call as the position drifts. Lower
 utilization means a smaller position and more cushion; 1.0 uses all of base capital
