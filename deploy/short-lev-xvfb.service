@@ -1,0 +1,33 @@
+[Unit]
+# The virtual display. Gateway is a Java GUI app with no headless mode, so it
+# needs an X server even though nobody looks at it. Everything else in the stack
+# depends on this one being up first.
+Description=short-lev: Xvfb virtual display :10
+After=network.target
+
+[Service]
+Type=simple
+User=short-lev
+Group=short-lev
+ExecStart=/usr/bin/Xvfb :10 -screen 0 1024x768x24 -nolisten tcp
+Restart=always
+RestartSec=5
+
+# -nolisten tcp above already refuses network clients; this is the belt to that
+# braces. Xvfb needs no privileges beyond drawing into its own memory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,43 @@
+[Unit]
+# VNC into the virtual display. An escape hatch for when Gateway needs eyes --
+# a 2FA prompt, a dialog, a look at what it is actually showing -- not part of
+# normal operation.
+#
+# ITS OWN UNIT, DELIBERATELY NOT FOLDED INTO GATEWAY. It attaches to the DISPLAY,
+# not to Gateway, so it depends on Xvfb alone. If it were PartOf= or Requires=
+# the Gateway unit, restarting a dead VNC would restart Gateway -- logging it out
+# and creating exactly the situation this whole spec exists to avoid.
+Description=short-lev: x11vnc on display :10
+Requires=short-lev-xvfb.service
+After=short-lev-xvfb.service
+
+[Service]
+Type=simple
+User=short-lev
+Group=short-lev
+Environment=DISPLAY=:10
+
+# -localhost keeps this bound to loopback: reachable only through an SSH tunnel,
+# never from the network. -nopw is safe ONLY because of that -- do not drop
+# -localhost without adding authentication first.
+# -forever so it keeps serving after a viewer disconnects instead of exiting.
+ExecStart=/usr/bin/x11vnc -display :10 -localhost -nopw -forever
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

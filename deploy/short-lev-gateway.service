@@ -1,0 +1,39 @@
+[Unit]
+# IB Gateway, started and logged in by IBC. This is the unit that makes a reboot
+# unattended: IBC types the credentials into Gateway's login dialog so nobody
+# has to do it over VNC.
+Description=short-lev: IB Gateway via IBC
+Requires=short-lev-xvfb.service
+After=short-lev-xvfb.service
+
+[Service]
+Type=simple
+User=short-lev
+Group=short-lev
+Environment=DISPLAY=:10
+ExecStart=/opt/ibc/gatewaystart.sh
+Restart=always
+
+# 30, not 10. A Gateway that is failing because it needs fresh authentication is
+# not helped by restarting every ten seconds, and IBKR throttles repeated login
+# attempts -- hammering it turns a two-minute manual fix into a lockout.
+RestartSec=30
+
+# HARDENING IS DELIBERATELY LOOSER THAN THE MONITOR'S. Gateway writes to ~/Jts
+# constantly -- settings, logs, and its own auto-restart state -- so
+# ProtectHome=read-only breaks it. That is a real constraint, not an oversight:
+# do not "tighten" this to match short-lev-monitor.service.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
