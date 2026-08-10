@@ -27,6 +27,16 @@ into the trigger logic and can resize the position. capital_utilization
 (default 0.75) leaves a deliberate slice of base_capital undeployed as headroom
 against the cushion going negative -- it reduces breach risk, it does not
 eliminate it, which is why the de-risk rule exists.
+
+Margin required is a function of BOTH legs (spec 005):
+
+    margin_required = long_rate * long_notional + short_rate * short_notional
+
+not of the short leg alone. The single-valued config.margin_multiplier(pair)
+is that same formula collapsed at zero net delta, where long = leverage *
+short; it is used for SIZING (where the position is neutral by construction)
+and never for measuring a drifted position. Measuring with it would understate
+margin as the long leg grows -- the shape error spec 004 observed live.
 """
 
 import pandas as pd
@@ -44,10 +54,10 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
     """Run the band-rebalanced backtest for one pair.
 
     pair_key indexes config.PAIRS. target (the steady-state short notional) is
-    derived from base_capital via the pair's margin_multiplier and
+    derived from base_capital via the pair's derived margin_multiplier and
     capital_utilization: target = (base_capital * capital_utilization) /
-    margin_multiplier, i.e. the short notional that the utilized fraction of
-    base_capital (cash) supports at that pair's margin rate. The rest
+    config.margin_multiplier(pair), i.e. the short notional that the utilized
+    fraction of base_capital (cash) supports at that pair's margin rate. The rest
     (1 - capital_utilization) is deliberate slack, kept as headroom against
     margin cushion going negative. base_capital itself keeps meaning "cash
     deployed" -- it's still the pct_return denominator regardless of
@@ -92,7 +102,7 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
     # Steady-state short notional. Loop state, not a constant: a margin de-risk
     # recomputes it from current equity and ratchets it DOWN (never up), so the
     # foil decay band below always measures against the *current* target.
-    target = (base_capital * capital_utilization) / pair["margin_multiplier"]
+    target = (base_capital * capital_utilization) / config.margin_multiplier(pair)
 
     # Segment state: dollar sizes fixed at segment entry, marked by the engine.
     lev_e = lev_p.iloc[0]
@@ -164,8 +174,9 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
                 target=target,
                 account_equity=account_equity,
                 peak_equity=peak_equity,
-                margin_required=pair["margin_multiplier"] * short_notional,
-                margin_multiplier=pair["margin_multiplier"],
+                margin_required=(pair["long_rate"] * long_notional
+                                 + pair["short_rate"] * short_notional),
+                margin_multiplier=config.margin_multiplier(pair),
             ),
             decision.BandParams(
                 long_short_band=long_short_band,
@@ -221,7 +232,12 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
         r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
         equity.append(realized + r["net"] - borrow_paid)
 
-        margin_required = pair["margin_multiplier"] * short_notional
+        # Both legs, post-action: a trip above rewrote short_notional AND
+        # long_notional, so this charges the day on the sizes actually carried
+        # out of it. Same two-term formula the trigger used; only the pre/post
+        # timing differs (the known seam -- see decision.evaluate's docstring).
+        margin_required = (pair["long_rate"] * long_notional
+                           + pair["short_rate"] * short_notional)
         margin_cushion.append(equity[-1] + base_capital - margin_required)
 
     equity_curve = pd.Series(equity, index=dates, name="equity")
