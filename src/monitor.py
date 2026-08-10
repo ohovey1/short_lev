@@ -38,6 +38,7 @@ import sys
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from ib_async import IB
 
 import alert_state
 import broker
@@ -389,6 +390,42 @@ def check_record(state, d, unactionable):
     }
 
 
+def connect_with_backoff(backoff=RECONNECT_BACKOFF_START):
+    """Connect, retrying forever with exponential backoff. Never raises.
+
+    Used for the FIRST connect as well as every reconnect -- one backoff path,
+    not two. Under systemd the monitor starts as soon as Gateway's *process*
+    exists, which is well before Gateway is logged in and serving the API:
+    After= is ordering, not readiness. A connect that raises there is a crash
+    loop on every boot, silent for the first minutes and filling the journal
+    with noise that masks real failures.
+
+    Catches Exception, not DISCONNECT_ERRORS. The two failures actually seen --
+    the paper-disclaimer gate (Error 10141) and a stale clientId -- come back as
+    ib_async errors, which are not OSError subclasses. Catching only the
+    disconnect tuple is exactly why they killed the process.
+
+    IB.sleep, never time.sleep: it is a staticmethod (the same function object
+    as util.sleep) and pumps the event loop without a live handle, which is what
+    the first connect and a failed reconnect both need.
+    """
+    while True:
+        try:
+            return broker.connect()
+        except KeyboardInterrupt:
+            # Ctrl-C during startup must still exit. BaseException, so it would
+            # slip past `except Exception` anyway -- named to say that is meant.
+            raise
+        except Exception as exc:
+            log.warning(
+                "connect failed: %s: %s -- retrying in %ds",
+                type(exc).__name__, exc, backoff,
+            )
+            log.debug("connect traceback", exc_info=True)
+            IB.sleep(backoff)
+            backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
+
+
 def run():
     raw_capital = os.environ.get("MONITOR_BASE_CAPITAL")
     if raw_capital in (None, ""):
@@ -446,9 +483,9 @@ def run():
                         type(exc).__name__, exc)
 
     peak_equity = monitor_state.load(path)
-    ib = broker.connect()
-    checked_sanity = False
     backoff = RECONNECT_BACKOFF_START
+    ib = connect_with_backoff()
+    checked_sanity = False
     was_connected = True
     checks_since_heartbeat = 0
     legs_missing = False
@@ -456,11 +493,14 @@ def run():
     while True:
         try:
             if not ib.isConnected():
-                log.warning("not connected; reconnecting in %ds", backoff)
+                # No sleep before the first attempt: the DISCONNECT_ERRORS
+                # handler below has already waited `backoff` by the time the
+                # loop re-enters here, and the old code waited a second time.
+                # The helper owns every wait after a FAILED attempt, and does
+                # not give up. Reset to the floor once it returns a live handle.
+                log.warning("not connected; reconnecting")
                 was_connected = False
-                ib.sleep(backoff)
-                backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
-                ib = broker.connect()
+                ib = connect_with_backoff(backoff)
                 backoff = RECONNECT_BACKOFF_START
                 continue
 

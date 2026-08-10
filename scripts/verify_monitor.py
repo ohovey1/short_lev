@@ -28,6 +28,11 @@ Spec 006 adds:
   n2. A suppressed (unactionable) trip does not steal the dedup slot.
   o. A JSONL write to an unwritable path logs and continues rather than raising.
   p. Malformed alert state resets rather than refusing to start.
+
+Spec 007 adds:
+  q. The INITIAL connect retries with backoff instead of exiting -- otherwise
+     systemd crash-loops the monitor on every boot while Gateway is still coming
+     up.
 """
 
 import datetime
@@ -510,12 +515,55 @@ def check_p():
                      f"{recovered}, keys={sorted(keys)}")
 
 
+def check_q():
+    """Spec 007 item 1. The initial connect must retry, not exit.
+
+    Under systemd the monitor starts once Gateway's PROCESS exists, well before
+    Gateway is logged in and serving the API. A connect that raises there is a
+    crash loop on every boot.
+
+    The two failures actually observed -- the paper-disclaimer gate and a stale
+    clientId -- arrive as ib_async errors, NOT OSError subclasses, so this uses
+    a plain Exception to prove the handler is not the DISCONNECT_ERRORS tuple.
+    """
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise Exception("Error 10141: paper trading disclaimer")
+        return "handle"
+
+    slept = []
+    real_connect, real_sleep = broker.connect, monitor.IB.sleep
+    monitor.broker.connect = flaky
+    monitor.IB.sleep = lambda secs: slept.append(secs)
+    try:
+        handle = monitor.connect_with_backoff()
+        raised = False
+    except Exception:
+        handle, raised = None, True
+    finally:
+        monitor.broker.connect = real_connect
+        monitor.IB.sleep = real_sleep
+
+    # Two failures -> two backoff waits, doubling from the floor.
+    expected_sleeps = [monitor.RECONNECT_BACKOFF_START,
+                       monitor.RECONNECT_BACKOFF_START * 2]
+    ok = (not raised and handle == "handle" and calls["n"] == 3
+          and slept == expected_sleeps)
+    return check("q. the initial connect retries instead of exiting",
+                 ok, f"raised={raised}, {calls['n']} attempts, returned "
+                     f"{handle!r}, backoff waits {slept} (expected "
+                     f"{expected_sleeps})")
+
+
 def main():
     results = [
         check_a(), check_b(), check_c(), check_d(), check_e(),
         check_f(), check_g(), check_h(), check_i(), check_j(),
         check_k(), check_l(), check_m(), check_n(), check_n2(),
-        check_o(), check_p(),
+        check_o(), check_p(), check_q(),
     ]
     print("=" * 60)
     if all(results):
