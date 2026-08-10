@@ -218,15 +218,20 @@ def read_position(ib, pair_key, target, peak_equity):
         log.error("account values unreadable; not deciding this cycle")
         return None
 
-    # The research output of this whole spec: how far off is the modeled
-    # margin_multiplier from what IBKR actually charges. Logged every check,
-    # tripped or not.
-    modeled_margin = pair["margin_multiplier"] * short_notional
+    # How far off is the modeled margin from what IBKR actually charges. Logged
+    # every check, tripped or not -- this comparison is what caught both the
+    # rate and the shape errors that spec 005 corrected, so it stays on.
+    # Two-term now: the old short-only form could not move when only the long
+    # leg changed, which is precisely how the shape error stayed invisible.
+    modeled_margin = (pair["long_rate"] * long_notional
+                      + pair["short_rate"] * short_notional)
     ratio = margin_required / modeled_margin if modeled_margin else float("nan")
     log.info(
-        "margin: ibkr_maint=%.2f modeled=%.2f (mult=%.2f x short=%.2f) ratio=%.3f",
-        margin_required, modeled_margin, pair["margin_multiplier"],
-        short_notional, ratio,
+        "margin: ibkr_maint=%.2f modeled=%.2f "
+        "(long %.2f x %.2f + short %.2f x %.2f) ratio=%.3f",
+        margin_required, modeled_margin,
+        pair["long_rate"], long_notional,
+        pair["short_rate"], short_notional, ratio,
     )
 
     return decision.PositionState(
@@ -237,7 +242,7 @@ def read_position(ib, pair_key, target, peak_equity):
         account_equity=account_equity,
         peak_equity=peak_equity,
         margin_required=margin_required,
-        margin_multiplier=pair["margin_multiplier"],
+        margin_multiplier=config.margin_multiplier(pair),
     )
 
 

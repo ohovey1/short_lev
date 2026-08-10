@@ -16,8 +16,13 @@ long-short band. At most one fires.
 
 margin_required is a field on PositionState rather than something computed
 here, precisely so the monitor can pass IBKR's actual MaintMarginReq while the
-backtest passes its margin_multiplier * short_notional estimate. That
-difference is the whole point of the seam.
+backtest passes its own modeled estimate. That difference is the whole point of
+the seam -- and it is why no margin formula lives in this file.
+
+The backtest's estimate is two-term as of spec 005:
+long_rate * long_notional + short_rate * short_notional. It was previously
+margin_multiplier * short_notional, which is the same formula collapsed at zero
+net delta and therefore understated margin as the long leg drifted.
 """
 
 from dataclasses import dataclass
@@ -31,9 +36,11 @@ class PositionState:
     target: float               # current (possibly ratcheted) target
     account_equity: float       # base_capital + realized + mark - borrow_paid
     peak_equity: float
-    margin_required: float      # backtest passes margin_multiplier * short_notional;
-                                # the monitor will pass IBKR's MaintMarginReq
-    margin_multiplier: float    # still needed for target_new
+    margin_required: float      # backtest passes long_rate * long + short_rate * short;
+                                # the monitor passes IBKR's MaintMarginReq
+    margin_multiplier: float    # sizing denominator, still needed for target_new.
+                                # Derived by the caller via
+                                # config.margin_multiplier(pair) -- never stored.
 
 
 @dataclass(frozen=True)

@@ -87,13 +87,15 @@ def band_params():
 def derive_target(base_capital, params, pair):
     """target = (base_capital * capital_utilization) / margin_multiplier
 
-    The one formula, identical to band.py. base_capital is an allocation
-    decision, never NLV -- deriving target from account value makes the
-    reference drift with P&L, so drift never accumulates against it and the
-    foil decay band silently never fires. STRATEGY_SPEC section 1 has the full
-    argument; do not re-derive it here.
+    The one formula, identical to band.py, with the denominator derived from
+    the pair's two margin rates rather than stored (config.margin_multiplier).
+
+    base_capital is an allocation decision, never NLV -- deriving target from
+    account value makes the reference drift with P&L, so drift never
+    accumulates against it and the foil decay band silently never fires.
+    STRATEGY_SPEC section 1 has the full argument; do not re-derive it here.
     """
-    return (base_capital * params.capital_utilization) / pair["margin_multiplier"]
+    return (base_capital * params.capital_utilization) / config.margin_multiplier(pair)
 
 
 def startup_sanity_check(base_capital, target, state):
@@ -226,9 +228,12 @@ def run():
     target = derive_target(base_capital, params, pair)
     log.info(
         "target=%.2f derived from base_capital=%.2f x capital_utilization=%.2f "
-        "/ margin_multiplier=%.2f  [pair=%s leverage=%s]",
+        "/ margin_multiplier=%.2f (= long %.2f x %s + short %.2f)  "
+        "[pair=%s leverage=%s]",
         target, base_capital, params.capital_utilization,
-        pair["margin_multiplier"], PAIR_KEY, pair["leverage"],
+        config.margin_multiplier(pair),
+        pair["long_rate"], pair["leverage"], pair["short_rate"],
+        PAIR_KEY, pair["leverage"],
     )
     log.info(
         "bands: long_short=%.2f foil_decay=%.2f drawdown_stop=%s derisk=%s "
