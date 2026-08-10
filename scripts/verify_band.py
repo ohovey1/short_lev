@@ -90,7 +90,7 @@ def check_a():
     """
     print("--- a. Hand-computed two-segment check (fabricated 4-day window) ---")
     pair = config.PAIRS[PAIR_KEY]
-    mm = pair["margin_multiplier"]
+    mm = config.margin_multiplier(pair)
     base_capital = 1000.0
     target = base_capital / mm
     fake = {
@@ -101,9 +101,19 @@ def check_a():
     real_get_prices = data.get_prices
     data.get_prices = lambda ticker: fake[ticker]
     try:
+        # margin_derisk=False for the same reason foil_decay_band is 10.0: this
+        # check isolates the long-short trip and nothing else. At
+        # capital_utilization=1.0 the entry cushion is zero BY CONSTRUCTION
+        # (STRATEGY_SPEC section 1 notes this), so margin required and equity
+        # are exactly equal on d0 and the strict `equity < margin_required`
+        # comparison sits on a knife edge. The two-term form (spec 005)
+        # evaluates 0.25*1818.181818 + 0.90*606.060606 to 1000.0000000000001 --
+        # one ulp above 1000.0 -- which tips that comparison and fires a
+        # spurious de-risk. Disabling the rule keeps the fixture measuring the
+        # band it was written for rather than float rounding at cu=1.0.
         r = band.run_band_backtest(
             PAIR_KEY, base_capital=base_capital, long_short_band=0.10, foil_decay_band=10.0,
-            capital_utilization=1.0, borrow_rate_annual=0.0,
+            capital_utilization=1.0, borrow_rate_annual=0.0, margin_derisk=False,
         )
     finally:
         data.get_prices = real_get_prices
@@ -146,7 +156,7 @@ def check_b():
     pair = config.PAIRS[PAIR_KEY]
     rate = pair["borrow_rate_annual"]
     base = 10000.0
-    target = base / pair["margin_multiplier"]
+    target = base / config.margin_multiplier(pair)
 
     # Closing rules off: this check isolates the band policy, and at
     # capital_utilization=1.0 the post-reset cushion is exactly zero, so the
@@ -212,21 +222,31 @@ def check_c():
 def check_d():
     """Formula check: target = (base_capital * capital_utilization) / margin_multiplier.
 
-    TSLL's margin_multiplier is 1.60 (config.py); at the new default
-    capital_utilization=0.75, base_capital=10000 should resolve to
-    target = 10000*0.75/1.6 = 4687.5."""
+    TSLL's multiplier is DERIVED (spec 005): long_rate 0.25 x leverage 2 +
+    short_rate 0.60 = 1.10. It was 1.60 before, built on the 50% *initial*
+    single-stock long rate where 25% *maintenance* applies.
+
+    At the default capital_utilization=0.75, base_capital=10000:
+        target = 10000 * 0.75 / 1.10 = 7500 / 1.1 = 75000/11 = 6818.1818...
+
+    75000/11 is not representable in binary floating point, so the expectation
+    is written as the exact rational rather than a rounded decimal literal.
+    """
     print("--- d. target = (base_capital * capital_utilization) / margin_multiplier (TSLL) ---")
-    mm = config.PAIRS["TSLL"]["margin_multiplier"]
+    pair = config.PAIRS["TSLL"]
+    mm = config.margin_multiplier(pair)
     base_capital = 10000.0
     capital_utilization = 0.75
     target = (base_capital * capital_utilization) / mm
-    expected = 4687.5
-    ok = abs(target - expected) < 1e-9
+    expected = 75000 / 11          # = 6818.1818..., hand-derived above
+    ok = abs(mm - 1.10) < 1e-9 and abs(target - expected) < 1e-9
     return check(
         "d", ok,
-        f"TSLL margin_multiplier {mm}, base_capital {base_capital:.2f}, "
-        f"capital_utilization {capital_utilization} -> target {target:.4f} "
-        f"(expected {expected:.4f})",
+        f"TSLL margin_multiplier {mm:.4f} (= {pair['long_rate']} x "
+        f"{pair['leverage']} + {pair['short_rate']}, expected 1.10), "
+        f"base_capital {base_capital:.2f}, capital_utilization "
+        f"{capital_utilization} -> target {target:.4f} "
+        f"(expected {expected:.4f} = 75000/11)",
     )
 
 
@@ -237,13 +257,24 @@ def check_e():
     cached window with default bands no longer breaches at this setting --
     confirmed by hand-reconstructing the loop before writing this check: all
     13 configured pairs drop to zero breach-days at 0.75 vs. breaching at 1.0
-    (see check_g for the cross-pair sweep this check's TSLL case is part of)."""
+    (see check_g for the cross-pair sweep this check's TSLL case is part of).
+
+    The entry-cushion formula is unchanged by spec 005's two-term margin, and
+    that is not a coincidence: at entry the position is delta-neutral, so
+    long_rate*(L*target) + short_rate*target collapses to exactly
+    margin_multiplier*target (TSLL: 0.25*13636.36 + 0.60*6818.18 = 7500.00 =
+    1.10*6818.18). The two forms can only diverge once delta drifts.
+
+    Re-verified empirically after the rate correction (targets grew 45% on the
+    single-stock pairs, consuming more margin): TSLL still shows zero breach
+    days at 0.75, min cushion ~1927.25.
+    """
     print("--- e. Margin cushion at capital_utilization=0.75 (TSLL, full window) ---")
     pair = config.PAIRS["TSLL"]
     rate = pair["borrow_rate_annual"]
     base_capital = 10000.0
     capital_utilization = 0.75
-    target = (base_capital * capital_utilization) / pair["margin_multiplier"]
+    target = (base_capital * capital_utilization) / config.margin_multiplier(pair)
 
     r = band.run_band_backtest(
         "TSLL", base_capital=base_capital, capital_utilization=capital_utilization,
@@ -268,16 +299,25 @@ def check_e():
 
 def check_f():
     """Backward compatibility: capital_utilization=1.0 exactly reproduces the
-    prior (pre-cushion-knob) sizing -- target = base_capital / margin_multiplier,
-    TSLL -> 6250.0 -- and TSLL still breaches at that setting (the same
-    historical fact check_e used to assert before the default changed)."""
+    prior (pre-cushion-knob) sizing -- target = base_capital / margin_multiplier
+    with no utilization haircut -- and TSLL still breaches at that setting (the
+    same historical fact check_e used to assert before the default changed).
+
+    The multiplier itself moved in spec 005 (1.60 -> 1.10), so the target moved
+    with it:
+        target = 10000 / 1.10 = 100000/11 = 9090.9090...   (was 6250.0)
+
+    What this check asserts is the *no-haircut* relationship, not the old
+    constant. 100000/11 is not representable in binary floating point, hence
+    the exact rational rather than a rounded literal.
+    """
     print("--- f. capital_utilization=1.0 backward compatibility (TSLL) ---")
     pair = config.PAIRS["TSLL"]
     rate = pair["borrow_rate_annual"]
     base_capital = 10000.0
-    mm = pair["margin_multiplier"]
+    mm = config.margin_multiplier(pair)
     target = (base_capital * 1.0) / mm
-    expected_target = 6250.0
+    expected_target = 100000 / 11   # = 9090.9090..., hand-derived above
 
     # Closing rules off: this check asserts a PRE-spec-002 fact (that cu=1.0
     # breached), so it must measure the position the way it was measured then.
@@ -355,7 +395,7 @@ def check_h():
     print("--- h. Drawdown stop, hand-checked (fabricated 4-day window) ---")
     pair = config.PAIRS[PAIR_KEY]
     base_capital = 1000.0
-    target = base_capital / pair["margin_multiplier"]
+    target = base_capital / config.margin_multiplier(pair)
     fake = {
         pair["leveraged_ticker"]: fake_ohlc([100.0, 117.0, 130.0, 90.0]),
         pair["underlying_ticker"]: fake_ohlc([100.0, 100.0, 100.0, 100.0]),
@@ -406,21 +446,31 @@ def check_h():
 def check_i():
     """Gate 2 -- margin de-risk, hand-checked on a fabricated path.
 
-    TQQQ (L=3, mm=1.65), base_capital=1000, capital_utilization=0.75 ->
-    target = 750/1.65 = 454.545455, long = 1363.636364. Bands huge, borrow 0,
-    drawdown stop disabled so de-risk is the only actor.
-      d0 (100, 100): entry. cushion = 1000 - 1.65*454.545455 = 250 > 0.
-      d1 (140, 100): LETF +40%, underlying flat. short_notional =
-          454.545455*1.40 = 636.363636; margin required = 1.65*636.363636 =
-          1050.000000. The segment marks short_pnl = -454.545455*0.40 =
-          -181.818182, so account_equity = 818.181818 < 1050 -> DE-RISK on d1.
-          target_new = (818.181818 * 0.75) / 1.65 = 371.900826.
-          Post-reset cushion must equal account_equity * (1 - 0.75) =
-          204.545455 exactly (the spec's stated property).
+    TQQQ (L=3, long_rate 0.25, short_rate 0.90 -> mm 1.65), base_capital=1000,
+    capital_utilization=0.75 -> target = 750/1.65 = 454.545455,
+    long = 1363.636364. Bands huge, borrow 0, drawdown stop disabled so
+    de-risk is the only actor.
+      d0 (100, 100): entry, delta-neutral. margin = 0.25*1363.636364 +
+          0.90*454.545455 = 750.000000, identical to the collapsed
+          1.65*454.545455 (neutrality is exactly when the two agree).
+          cushion = 1000 - 750 = 250 > 0.
+      d1 (140, 100): LETF +40%, underlying flat -- so the position is NOT
+          neutral here and the two forms diverge. short_notional =
+          454.545455*1.40 = 636.363636, long_notional unchanged at 1363.636364.
+          margin required = 0.25*1363.636364 + 0.90*636.363636 = 913.636364
+          (the short-only form gave 1050.000000 -- spec 005's shape fix).
+          The segment marks short_pnl = -454.545455*0.40 = -181.818182, so
+          account_equity = 818.181818 < 913.636364 -> DE-RISK still fires on d1.
+          target_new = (818.181818 * 0.75) / 1.65 = 371.900826, unchanged: the
+          sizing denominator is the collapsed multiplier either way.
+          Post-reset the position is neutral again (long = 3*target_new), so
+          margin = 0.25*1115.702479 + 0.90*371.900826 = 613.636364 = 1.65*
+          371.900826, and cushion equals account_equity * (1 - 0.75) =
+          204.545455 exactly (the spec's stated property, preserved).
     """
     print("--- i. Margin de-risk, hand-checked (fabricated window) ---")
     pair = config.PAIRS[PAIR_KEY]
-    mm = pair["margin_multiplier"]
+    mm = config.margin_multiplier(pair)
     base_capital = 1000.0
     cu = 0.75
     fake = {
@@ -534,8 +584,15 @@ DEFAULT_PARAMS = decision.BandParams(
 
 
 def state(short_notional, long_notional, target, account_equity, peak_equity,
-          margin_required, leverage=3.0, margin_multiplier=1.65):
-    """A PositionState with the boilerplate filled in."""
+          margin_required, leverage=3.0,
+          margin_multiplier=config.margin_multiplier(config.PAIRS["TQQQ"])):
+    """A PositionState with the boilerplate filled in.
+
+    The multiplier default is TQQQ's derived value (0.25*3 + 0.90 = 1.65),
+    sourced from config rather than written as a literal so the fixture cannot
+    silently drift from the registry it is meant to represent. Unchanged by
+    spec 005 -- only the single-stock pairs moved.
+    """
     return decision.PositionState(
         short_notional=short_notional, long_notional=long_notional,
         leverage=leverage, target=target, account_equity=account_equity,
@@ -755,10 +812,63 @@ def check_n():
     return check("n", ok, "; ".join(lines))
 
 
+def check_o():
+    """Spec 005 gates 1 and 2 -- the margin model's shape.
+
+    Gate 1, ZERO-DELTA IDENTITY. Where long = leverage * short exactly, the
+    two-term formula must equal the old collapsed margin_multiplier * short.
+    This is the algebraic identity that makes the old model a special case
+    rather than a different model; if it fails, the rates are wrong.
+        TSLL (L=2, long_rate 0.25, short_rate 0.60, mm 1.10):
+        short 1000, long 2000 -> 0.25*2000 + 0.60*1000 = 500 + 600 = 1100.00
+        collapsed:                                       1.10*1000 = 1100.00
+
+    Gate 2, OFF-NEUTRAL DIVERGENCE. Perturb the long leg +10% with the short
+    leg untouched. Margin MUST move; under the old short-only model it could
+    not, which is exactly how the shape error hid.
+        short 1000, long 2200 -> 0.25*2200 + 0.60*1000 = 550 + 600 = 1150.00
+        delta = +50.00, and +50.00 = 0.25 * 200 (the whole move is the long
+        leg's rate times its increase -- sign positive, magnitude exact).
+
+    Both arms are computed from config's rates, so a rate edit that broke the
+    identity would surface here rather than in a digest diff.
+    """
+    print("--- o. Two-term margin: zero-delta identity and off-neutral divergence ---")
+    pair = config.PAIRS["TSLL"]
+    lr, sr, L = pair["long_rate"], pair["short_rate"], pair["leverage"]
+    mm = config.margin_multiplier(pair)
+
+    short = 1000.0
+    long_neutral = L * short
+    two_term_neutral = lr * long_neutral + sr * short
+    collapsed = mm * short
+    gate1 = abs(two_term_neutral - collapsed) < 1e-9 and abs(two_term_neutral - 1100.0) < 1e-9
+
+    long_pert = long_neutral * 1.10
+    two_term_pert = lr * long_pert + sr * short
+    moved = two_term_pert - two_term_neutral
+    gate2 = (
+        abs(two_term_pert - 1150.0) < 1e-9
+        and abs(moved - 50.0) < 1e-9
+        and moved > 0
+    )
+
+    return check(
+        "o", gate1 and gate2,
+        f"neutral (short {short:.0f}, long {long_neutral:.0f}): two-term "
+        f"{two_term_neutral:.2f} vs collapsed {collapsed:.2f} "
+        f"(expected 1100.00 both){'  [FAIL]' if not gate1 else ''}; "
+        f"long +10% -> {long_pert:.0f}: two-term {two_term_pert:.2f} "
+        f"(expected 1150.00), moved {moved:+.2f} (expected +50.00, was +0.00 "
+        f"under the short-only model){'  [FAIL]' if not gate2 else ''}",
+    )
+
+
 def main():
     results = [
         check_a(), check_b(), check_c(), check_d(), check_e(), check_f(), check_g(),
         check_h(), check_i(), check_j(), check_k(), check_l(), check_m(), check_n(),
+        check_o(),
     ]
     print("=" * 60)
     if all(results):

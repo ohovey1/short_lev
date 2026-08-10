@@ -100,16 +100,23 @@ def _values(nlv="100000", maint="7500"):
 
 def check_a():
     """Worked example, STRATEGY_SPEC section 4: TSLA/TSLL, base_capital 10,000,
-    margin_multiplier 1.60, capital_utilization 0.75.
+    capital_utilization 0.75, margin_multiplier DERIVED as
+    long_rate 0.25 x leverage 2 + short_rate 0.60 = 1.10 (spec 005; it was 1.60
+    on the 50% initial single-stock long rate, where 25% maintenance applies).
 
-        target = (10,000 * 0.75) / 1.60 = 4,687.50
+        target = (10,000 * 0.75) / 1.10 = 7500 / 1.1 = 75000/11 = 6,818.1818...
+
+    75000/11 has no exact binary float representation, so the expectation is
+    the rational rather than a rounded decimal. The monitor and the backtest
+    must agree here -- same formula, same inputs, one definition.
     """
     params = monitor.band_params()
     pair = config.PAIRS["TSLL"]
     target = monitor.derive_target(10_000.0, params, pair)
-    ok = abs(target - 4687.50) < 1e-9
+    expected = 75000 / 11
+    ok = abs(target - expected) < 1e-9
     return check("a. target derivation matches the spec's worked example",
-                 ok, f"derived {target:.2f}, spec says 4687.50")
+                 ok, f"derived {target:.4f}, spec says {expected:.4f} (75000/11)")
 
 
 def check_b():
