@@ -31,6 +31,7 @@ and it applies to the poll interval AND to every wait in the reconnect backoff.
 """
 
 import asyncio
+import datetime
 import logging
 import os
 import sys
@@ -38,10 +39,13 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+import alert_state
 import broker
 import config
 import decision
+import events
 import monitor_state
+import notify
 
 load_dotenv()
 
@@ -76,29 +80,24 @@ def _env_bool(name, default):
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _heartbeat_time():
+    """(hour, minute) from HEARTBEAT_HOUR. Accepts "09:45" or "9".
 
-def _env_float(name, default):
-    raw = os.environ.get(name)
-    return float(raw) if raw not in (None, "") else default
-
-
-def _env_bool(name, default):
-    raw = os.environ.get(name)
-    if raw in (None, ""):
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _env_float(name, default):
-    raw = os.environ.get(name)
-    return float(raw) if raw not in (None, "") else default
-
-
-def _env_bool(name, default):
-    raw = os.environ.get(name)
-    if raw in (None, ""):
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+    Interpreted in the machine's local timezone. The deploy target runs on ET;
+    a box on another zone should set the clock or the hour accordingly, which
+    is noted in .env.example rather than solved with a tz dependency.
+    """
+    raw = (os.environ.get("HEARTBEAT_HOUR") or "").strip()
+    if not raw:
+        return 9, 45
+    try:
+        if ":" in raw:
+            hour, minute = raw.split(":", 1)
+            return int(hour), int(minute)
+        return int(raw), 0
+    except ValueError:
+        log.warning("HEARTBEAT_HOUR=%r is not readable; using 09:45", raw)
+        return 9, 45
 
 
 def band_params():
@@ -318,6 +317,78 @@ def trade_lines(state, d, prices):
 
 # Severity per event, straight from the spec's table. Trips are WARNING; the
 # two that mean the position is already in trouble are CRITICAL.
+# The dedup slot holds one value. While a trip is suppressed as unactionable
+# this key occupies it, so the sanity warning repeats on the normal timer
+# instead of the two keys alternating and re-sending every cycle.
+SANITY_TRIGGER_KEY = "sanity: base_capital exceeds NLV"
+
+TRIGGER_SEVERITY = {
+    "drawdown stop": "CRITICAL",
+    "margin de-risk": "CRITICAL",
+    "foil decay band": "WARNING",
+    "long-short band": "WARNING",
+}
+
+
+def trip_message(state, d, prices):
+    """The body of a trip alert: current state, then both trade lines.
+
+    Actionable without opening TWS -- that is the whole requirement.
+    """
+    lines = [
+        f"short {state.short_notional:,.2f} / target {state.target:,.2f}",
+        f"long {state.long_notional:,.2f} | net delta {d.net_delta:+,.2f}",
+        f"cushion {d.margin_cushion:+,.2f} (equity {state.account_equity:,.2f})",
+        "",
+    ]
+    lines.extend(trade_lines(state, d, prices))
+
+    if d.trigger == "margin de-risk":
+        lines.append(
+            f"\nde-risk would ratchet target to {d.new_target:,.2f}. REPORTED "
+            "ONLY -- the monitor does not trade and does not persist this."
+        )
+    if d.terminal:
+        lines.append(
+            "\nTERMINAL: nothing is executed here. The position stays open "
+            "until a human acts."
+        )
+    return "\n".join(lines)
+
+
+def heartbeat_message(state, d, checks_since):
+    return "\n".join([
+        f"monitoring {PAIR_KEY}, {checks_since} checks since last heartbeat",
+        f"short {state.short_notional:,.2f} / target {state.target:,.2f}",
+        f"long {state.long_notional:,.2f} | net delta {d.net_delta:+,.2f}",
+        f"cushion {d.margin_cushion:+,.2f} (equity {state.account_equity:,.2f})",
+        f"state: {d.trigger or 'no trigger'}",
+    ])
+
+
+def check_record(state, d, unactionable):
+    """The checks.jsonl row. One line per check, tripped or not."""
+    pair = config.PAIRS[PAIR_KEY]
+    return {
+        "pair": PAIR_KEY,
+        "short_notional": round(state.short_notional, 2),
+        "long_notional": round(state.long_notional, 2),
+        "target": round(state.target, 2),
+        "net_delta": round(d.net_delta, 2),
+        "margin_cushion": round(d.margin_cushion, 2),
+        "account_equity": round(state.account_equity, 2),
+        "peak_equity": round(state.peak_equity, 2),
+        "ibkr_maint": round(state.margin_required, 2),
+        # The same two-term model broker.read_position logs each cycle. Not a
+        # strategy formula -- the sizing denominator stays in config.py.
+        "modeled_maint": round(
+            pair["long_rate"] * state.long_notional
+            + pair["short_rate"] * state.short_notional, 2),
+        "trigger": d.trigger,
+        "unactionable": unactionable,
+    }
+
+
 def run():
     raw_capital = os.environ.get("MONITOR_BASE_CAPITAL")
     if raw_capital in (None, ""):
@@ -350,20 +421,56 @@ def run():
         params.margin_derisk, poll_seconds, path,
     )
 
+    repeat_minutes = _env_float("ALERT_REPEAT_MINUTES", 60)
+    heartbeat_hour, heartbeat_minute = _heartbeat_time()
+    token, chat_id = notify.credentials()
+    alert_path = alert_state.state_path()
+    alerts = alert_state.load(alert_path)
+
+    log.info(
+        "alerts: telegram=%s repeat=%.0fmin heartbeat=%02d:%02d events=%s "
+        "alert_state=%s",
+        "configured" if (token and chat_id) else "NOT configured (no-op)",
+        repeat_minutes, heartbeat_hour, heartbeat_minute,
+        events.event_log_dir(), alert_path,
+    )
+
+    def send(severity, kind, title, body):
+        """Hand a decision to the sink. Never raises."""
+        try:
+            notify.notify(token, chat_id, severity, kind, title, body)
+        except Exception as exc:
+            # notify() already catches its own failures; this is the belt to
+            # that braces. A broken sink must never stop the monitor.
+            log.warning("alert dispatch failed (non-fatal): %s: %s",
+                        type(exc).__name__, exc)
+
     peak_equity = monitor_state.load(path)
     ib = broker.connect()
     checked_sanity = False
     backoff = RECONNECT_BACKOFF_START
+    was_connected = True
+    checks_since_heartbeat = 0
+    legs_missing = False
 
     while True:
         try:
             if not ib.isConnected():
                 log.warning("not connected; reconnecting in %ds", backoff)
+                was_connected = False
                 ib.sleep(backoff)
                 backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
                 ib = broker.connect()
                 backoff = RECONNECT_BACKOFF_START
                 continue
+
+            if not was_connected:
+                # One INFO on recovery. Without it a nightly restart looks
+                # identical to a monitor that died and never came back.
+                log.info("reconnected")
+                send("INFO", "reconnected", f"{PAIR_KEY} -- reconnected",
+                     "Gateway connection re-established; monitoring resumed.")
+                was_connected = True
 
             # Re-derived every cycle, deliberately. Never read from state.
             target = derive_target(base_capital, params, pair)
@@ -394,8 +501,22 @@ def run():
                 # opened later, and a monitor that exits here needs a human to
                 # notice and restart it.
                 log.info("no valid position this cycle; polling again in %.0fs", poll_seconds)
+                if not legs_missing:
+                    # Transition only: a position closed overnight must not
+                    # alert every cycle until someone reopens it.
+                    legs_missing = True
+                    send("WARNING", "leg_check", f"{PAIR_KEY} -- leg check failed",
+                         "Could not read a valid two-leg position: a leg is "
+                         "missing, flat, or wrongly signed. Not deciding until "
+                         "both legs read correctly.")
                 ib.sleep(poll_seconds)
                 continue
+
+            if legs_missing:
+                log.info("position readable again")
+                send("INFO", "leg_check", f"{PAIR_KEY} -- position readable",
+                     "Both legs read correctly again; band checks resumed.")
+                legs_missing = False
 
             # Evaluated EVERY cycle, so suppression tracks the current account.
             # Console output stays once-only -- see log_startup_sanity.
@@ -406,26 +527,65 @@ def run():
 
             d = decision.evaluate(state, params)
 
-            # A trip recommending new exposure directly below a warning that the
-            # target is unachievable is two correct statements that contradict
-            # each other. The trip is real, so it is still evaluated and logged
-            # -- but it is not something you can act on. Not sending it is spec
-            # 006 item 2; the sink that would send it arrives in the next commit.
+            # A trip recommending ~$56k of new exposure directly below a warning
+            # that the target is unachievable is two correct statements that
+            # contradict each other. The trip is real, so it is still evaluated
+            # and logged -- but it is not something you can act on, so it is not
+            # sent. The sanity warning is what gets sent instead.
             unactionable = d.trigger is not None and s.capital_exceeds_nlv
 
-            log_check(state, d, broker.leg_prices(ib, PAIR_KEY),
-                      unactionable=unactionable)
+            prices = broker.leg_prices(ib, PAIR_KEY)
+            log_check(state, d, prices, unactionable=unactionable)
+            events.log_check(check_record(state, d, unactionable))
+            checks_since_heartbeat += 1
+
+            now = datetime.datetime.now()
+
+            if s.capital_exceeds_nlv:
+                # While suppressed the sanity warning OWNS the dedup slot. The
+                # band trigger must not be written into it: last_trigger holds
+                # one value, so alternating the two keys would make every cycle
+                # look like a transition and re-send both forever. Lifting the
+                # suppression then reads as a fresh trip, which is correct --
+                # it is the first one that was ever actionable.
+                send_it, _ = alert_state.should_send(
+                    alerts, SANITY_TRIGGER_KEY, now, repeat_minutes)
+                if send_it:
+                    send("WARNING", "sanity",
+                         f"{PAIR_KEY} -- base_capital exceeds NLV",
+                         "\n".join(s.messages))
+                    alerts = alert_state.record_sent(alerts, SANITY_TRIGGER_KEY, now)
+            else:
+                send_it, kind = alert_state.should_send(
+                    alerts, d.trigger, now, repeat_minutes)
+                if send_it and kind == "trip":
+                    send(TRIGGER_SEVERITY.get(d.trigger, "WARNING"), "trip",
+                         f"{PAIR_KEY} -- {d.trigger}",
+                         trip_message(state, d, prices))
+                    alerts = alert_state.record_sent(alerts, d.trigger, now)
+                elif send_it and kind == "resolved":
+                    send("INFO", "resolved", f"{PAIR_KEY} -- resolved",
+                         "No band is tripped. The position is back inside both "
+                         "bands and no action is required.")
+                    alerts = alert_state.record_sent(alerts, None, now)
+
+            if alert_state.heartbeat_due(alerts, now, heartbeat_hour, heartbeat_minute):
+                send("INFO", "heartbeat", f"{PAIR_KEY} -- daily heartbeat",
+                     heartbeat_message(state, d, checks_since_heartbeat))
+                alerts = alert_state.record_heartbeat(alerts, now)
+                checks_since_heartbeat = 0
+
+            alert_state.save(alert_path, alerts)
 
             if d.terminal:
                 # A drawdown stop is terminal in the backtest: the run ends. Here
                 # nothing is executed, so the position is still open and will
                 # re-trip every cycle. Keep monitoring -- going quiet after the
-                # single most important alert would be the wrong failure -- but
-                # say plainly that this needs a human, since dedup is spec 005.
+                # single most important alert would be the wrong failure.
                 log.error(
                     "TERMINAL trigger with no executor: the position is still "
-                    "open and this will re-alert every cycle until a human acts "
-                    "or the process is stopped."
+                    "open and this needs a human. Alerts repeat every %.0f min "
+                    "until it clears or the process is stopped.", repeat_minutes,
                 )
 
             ib.sleep(poll_seconds)
@@ -445,6 +605,7 @@ def run():
                 type(exc).__name__, exc, backoff,
             )
             log.debug("disconnect traceback", exc_info=True)
+            was_connected = False
             ib.sleep(backoff)
             backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
         except Exception:
