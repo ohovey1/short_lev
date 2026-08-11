@@ -1,12 +1,55 @@
 # VPS Operations -- `short-lev-01`
 
-Reference for the box that runs IB Gateway and the short_lev monitor.
-Verified 2026-08-06 through 2026-08-10.
+The box that runs IB Gateway and the short_lev monitor.
+Verified working 2026-08-10, after spec 007.
 
-Sections 1-7 are durable -- the box, access, Gateway, and the auth model. Section
-8 onward was rewritten in Phase 1d (spec 007) when systemd and IBC landed: the
-stack now runs as four units and survives a reboot unattended. tmux is no longer
-part of normal operation.
+---
+
+## Quick reference
+
+Everything routine, in one place.
+
+```bash
+ssh short-lev                    # in, as owen
+sudo -u short-lev -i             # switch to the service account
+exit                             # back out
+```
+
+**Check everything is alive**
+
+```bash
+sudo systemctl status short-lev-xvfb short-lev-gateway short-lev-vnc short-lev-monitor --no-pager | grep -E "●|Active:"
+```
+
+**Watch the monitor**
+
+```bash
+sudo journalctl -u short-lev-monitor -f -o cat
+```
+
+**Look at Gateway's screen** (weekly login, or when something needs eyes)
+
+```bash
+ssh -L 5900:localhost:5900 short-lev      # leave this terminal open
+```
+Then TigerVNC -> `localhost:5900`.
+
+**Deploy an update**
+
+```bash
+sudo -u short-lev /opt/short_lev/deploy/deploy.sh
+sudo systemctl restart short-lev-monitor   # only when you choose to
+```
+
+**Restart something**
+
+```bash
+sudo systemctl restart short-lev-monitor   # safe any time
+sudo systemctl restart short-lev-vnc       # safe: does not touch Gateway
+sudo systemctl restart short-lev-gateway   # IBC logs back in; monitor reconnects in ~10s
+```
+
+Nothing here needs tmux. The stack is under systemd and survives reboots.
 
 ---
 
@@ -15,27 +58,22 @@ part of normal operation.
 | | |
 |---|---|
 | Provider | Hetzner Cloud, project `short-lev` |
-| Server name | `short-lev-01` |
-| Type | **CPX 11** -- 2 vCPU / 2 GB RAM / 40 GB disk |
+| Server | `short-lev-01`, **CPX 11** -- 2 vCPU / 2 GB / 40 GB |
 | Cost | ~$21/mo, billed hourly |
-| Location | Ashburn, VA (us-east) |
+| Location | Ashburn, VA |
 | OS | Ubuntu **22.04.5 LTS** |
 | Public IPv4 | `5.161.232.45` |
 | Tailscale IPv4 | `100.123.221.44` |
-| Swap | 2 GB (`/swapfile`, persisted in `/etc/fstab`) |
+| Swap | 2 GB (`/swapfile`, in `/etc/fstab`) |
 
-**On sizing.** CPX 21 (4 GB, ~$38/mo) is the conservative choice. CPX 11 + swap
-was taken instead because Gateway self-caps its heap at `-Xmx768m` and idles
-around 270 MB. Hetzner resizes up in ~5 minutes with no reinstall. **If Gateway
-thrashes or is OOM-killed, resize rather than debugging.**
+Gateway self-caps its heap at `-Xmx768m` and sits around 208 MB running, so 2 GB
+plus swap is adequate. **If it thrashes or gets OOM-killed, resize to CPX 21
+rather than debugging** -- Hetzner resizes in ~5 minutes with no reinstall.
 
-**On location.** Ashburn matters for latency to IBKR's US gateways, and for
-avoiding a login from an unexpected country, which can trigger IBKR security
-review. Cost-optimised (CX) plans had no US stock at provisioning time.
+Ashburn matters for latency to IBKR and to avoid a login from an unexpected
+country triggering security review.
 
-**Do not use ARM.** IBKR ships Gateway as x86 Linux only. Avoid Hetzner's CAX
-line and Raspberry Pi -- ARM means unsupported jar extraction that breaks on
-Gateway's automatic updates.
+**Never ARM.** IBKR ships Gateway as x86 Linux only.
 
 ---
 
@@ -43,31 +81,39 @@ Gateway's automatic updates.
 
 | User | Login | Purpose |
 |---|---|---|
-| `root` | **disabled** | Reachable only via `sudo` from `owen`. |
-| `owen` | SSH key | Admin. Has a password, needed for `sudo`. |
-| `short-lev` | **none** (`--disabled-password`) | Service account. Owns `/opt/short_lev` and `/home/short-lev/Jts`. Reach with `sudo -u short-lev -i`. |
+| `root` | **disabled** | via `sudo` only |
+| `owen` | SSH key + password for sudo | admin |
+| `fiona` | SSH key + password for sudo | admin |
+| `short-lev` | **none** (`--disabled-password`) | service account, owns `/opt/short_lev` and `~/Jts` |
 
-The service account is deliberately separate from `owen` and from the `hype_arb`
-box entirely -- no shared blast radius between two trading systems.
+`short-lev` has no password and is not in `sudo`. Reach it with
+`sudo -u short-lev -i` from an admin account.
 
-**Onboarding another operator:** give them their own admin user rather than
-sharing `owen`, so the audit trail distinguishes actions. They will also need a
-Tailscale invite and their own IBKR user under Users & Access Rights.
+> **Anyone with `sudo` can read the IBKR password** in
+> `/var/lib/short-lev/ibc/config.ini`. File permissions stop other users, not
+> root. **Rotate the IBKR password whenever the set of admins changes.**
+
+**Adding an operator:** own admin user (not shared `owen`), plus `adm` group so
+they can read the journal without sudo, plus a Tailscale invite, plus their own
+IBKR user under Users & Access Rights.
+
+```bash
+adduser <name>
+usermod -aG sudo,adm <name>
+mkdir -p /home/<name>/.ssh
+nano /home/<name>/.ssh/authorized_keys        # paste their public key
+chown -R <name>:<name> /home/<name>/.ssh
+chmod 700 /home/<name>/.ssh
+chmod 600 /home/<name>/.ssh/authorized_keys
+```
+
+Without `adm`, `journalctl -u ...` silently shows nothing.
 
 ---
 
-## 3. Getting in and out
+## 3. Getting in
 
-### Local SSH key
-
-Per-project, matching the existing `hype_arb` convention:
-
-```
-~/.ssh/short_lev_vps        # private
-~/.ssh/short_lev_vps.pub    # registered in Hetzner as "owen-laptop short_lev"
-```
-
-### `~/.ssh/config`
+`~/.ssh/config` on your machine:
 
 ```
 Host short-lev
@@ -76,22 +122,17 @@ Host short-lev
     IdentityFile ~/.ssh/short_lev_vps
 ```
 
-### Connect
-
-```bash
-ssh short-lev                    # as owen
-sudo -u short-lev -i             # switch to the service account
-```
-
-`exit` once to leave `short-lev`, again to close the session.
+Key is per-project, matching the `hype_arb` convention.
 
 ### Common failures
 
-- `Permission denied (publickey)` -- `~/.ssh/config` still says `User root`.
-  Root login is disabled.
-- Commands "disappearing" after `ssh`, `sudo -u`, or `source` -- these change
+- `Permission denied (publickey)` -- config still says `User root`. Root login is
+  disabled.
+- **Commands vanishing** after `ssh`, `sudo -u`, or `source` -- these change
   shell context, and anything pasted before the new prompt appears is swallowed.
-  **Send one command at a time and wait for each prompt.**
+  **One command at a time.**
+- `sudo: unit: command not found` when running a repo script -- use
+  `sudo bash deploy/<script>.sh`, or `chmod +x` it.
 
 ---
 
@@ -111,308 +152,265 @@ ufw allow in on tailscale0
 ufw enable
 ```
 
-**Port 5900 (VNC) is deliberately not opened.** x11vnc binds to `-localhost`, so
-it is reachable only through an SSH tunnel. Two independent layers: firewall and
-bind address.
+**Port 5900 is deliberately not open.** x11vnc binds `-localhost`, reachable only
+through an SSH tunnel. Two layers: firewall and bind address.
 
-Timezone is `America/New_York`, intentionally -- every operational question about
-this box concerns the 23:45 ET Gateway reset, the Sunday 01:00 ET re-auth, and
-market hours.
+Timezone is `America/New_York` on purpose -- every operational question here is
+about the 23:45 ET Gateway restart, the Sunday 01:00 ET re-auth, and market hours.
 
-Unattended security upgrades are installed and enabled.
+Unattended security upgrades are on.
+
+**Open item:** public SSH could be closed (`ufw delete allow OpenSSH`) once every
+operator is on Tailscale, leaving no internet-facing surface at all.
 
 ---
 
-## 5. VNC access to Gateway
+## 5. VNC
 
-Needed whenever Gateway requires a human: weekly re-auth, or after a crash.
+Needed only when Gateway needs eyes -- IBC handles routine logins.
 
-**Client:** TigerVNC standalone (`vncviewer64-*.exe`, no install required).
+**Client:** TigerVNC standalone (`vncviewer64-*.exe`, no install).
 
-**Step 1 -- open the tunnel.** Its own terminal, left running:
-
-```bash
-ssh -L 5900:localhost:5900 short-lev
-```
-
-**Step 2 -- connect TigerVNC to `localhost:5900`.** Not the Tailscale IP --
-x11vnc refuses connections on that interface by design. Accept the unencrypted
-warning; SSH already encrypts the tunnel.
-
-**Step 3 -- close the tunnel terminal when done.**
+1. `ssh -L 5900:localhost:5900 short-lev` -- leave the terminal open
+2. TigerVNC -> `localhost:5900` (**not** the Tailscale IP; x11vnc refuses that
+   interface by design)
+3. Accept the unencrypted warning -- SSH already encrypts it
+4. Close the terminal when done
 
 Blank grey window: press Left-Alt three times to force a repaint.
 
 ### Session collision
 
-**Gateway, TWS, and Client Portal cannot hold the same login simultaneously.**
-Client Portal refuses with *"the production username associated with this
-paper-trading username has an active session."*
+**Gateway, TWS, and Client Portal cannot share a login.** Client Portal refuses
+with *"the production username associated with this paper-trading username has an
+active session."*
 
-Manual trades therefore require stopping Gateway first:
+Manual trades therefore need Gateway stopped first:
 
 ```bash
-pkill -f ibgateway                    # as short-lev
-# place trades via phone app or Client Portal
-DISPLAY=:10 ~/Jts/ibgateway &
+sudo systemctl stop short-lev-gateway
+# trade via phone app or Client Portal
+sudo systemctl start short-lev-gateway
 ```
 
-The mobile app may hold a separate session -- untested. A second user on the
-account under Users & Access Rights would remove the constraint entirely, and is
-the better long-term fix since Phase 2 is explicitly manual execution.
+The monitor rides the gap out on its reconnect backoff.
 
-### Alternative (not currently used)
-
-Binding x11vnc to the Tailscale IP (`-listen 100.123.221.44`) skips the tunnel,
-but then any device on the tailnet reaches the Gateway screen with no password.
-Worth reconsidering **with a VNC password set** if a non-technical person ever
-has to perform the weekly login -- it reduces the ritual to opening one app.
+Two things that would remove this: a second IBKR user under Users & Access
+Rights, or IBC 3.24's `PAUSE` command, which stops Gateway in a state that
+resumes without re-authentication.
 
 ---
 
-## 6. IB Gateway
+## 6. IB Gateway + IBC
 
-**Version 10.45**, `stable` channel, installed as `short-lev` in
-`/home/short-lev/Jts`.
+**Gateway 10.45** (`stable`, standalone) at `/home/short-lev/Jts/ibgateway/1045/`.
+**IBC 3.24.0** at `/opt/ibc`.
 
-### Install (for rebuilds)
+### The layout IBC requires
 
-```bash
-sudo -u short-lev -i
-cd ~
-wget https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/ibgateway-stable-standalone-linux-x64.sh
-chmod +x ibgateway-stable-standalone-linux-x64.sh
-./ibgateway-stable-standalone-linux-x64.sh -q -dir ~/Jts
+`ibcstart.sh` line 241 builds the path as:
+
+```
+gateway_program_path="${tws_path}/ibgateway/${tws_version}"
 ```
 
-`-q` runs unattended -- the installer needs no display. Use the **standalone**
-build; the regular installer requires a GUI.
+So it needs **`/home/short-lev/Jts/ibgateway/1045/jars/`** to exist. IBC does not
+run Gateway's launcher -- it invokes Java directly against those jars, which is
+why the folder must be exactly there and why moving the directory is safe.
 
-Prefer `stable` over `latest`: fewer version bumps under a box meant to sit
-untouched, and IBC pins to a Gateway major version.
+> **Do not pass `-dir` to the installer.** An earlier setup used
+> `-q -dir ~/Jts`, which flattened everything into `~/Jts` with no version
+> subdirectory. IBC then failed with *"Offline TWS/Gateway version 1045 is not
+> installed: can't find jars folder"*. Install with `-q` only, then move.
 
-> **The executable is `~/Jts/ibgateway` -- a file, not a directory.**
-> The standalone build differs from the installer layout. The
-> `~/Jts/ibgateway/*/ibgateway` path in every online guide fails here with
-> `Not a directory`.
+### IBC version constraints
 
-### Gateway settings (via VNC, Configure -> Settings)
+- **3.20.0 and earlier do not work.** Gateway 1034+ on Linux moved to the Azul
+  Zulu 17 JRE; support arrived in IBC 3.21.0.
+- **Avoid 3.21.0** -- broken autorestart with Gateway. Fixed in 3.21.1.
+- **3.24.0** is current and working here.
+- Note the maintainer has said he is stepping away from IBC. Logged as a risk.
 
-**API -> Settings:**
+### Version pinning lives in the start script, not the config
+
+There is no `IbGatewayVersionMajor` key in `config.ini` -- setting one does
+nothing. The version comes from `TWS_MAJOR_VRSN` in `/opt/ibc/gatewaystart.sh`,
+which ships defaulted to whatever was current when that IBC release was cut
+(3.24.0 ships `1019`).
+
+`gatewaystart.sh` also **overrides `IBC_INI` and `LOG_PATH` unconditionally**, so
+setting them in the environment or the unit has no effect. All three are edited
+in the script:
+
+```bash
+sudo sed -i 's/^TWS_MAJOR_VRSN=.*/TWS_MAJOR_VRSN=1045/' /opt/ibc/gatewaystart.sh
+sudo sed -i 's|^IBC_INI=.*|IBC_INI=/var/lib/short-lev/ibc/config.ini|' /opt/ibc/gatewaystart.sh
+sudo sed -i 's|^LOG_PATH=.*|LOG_PATH=/var/lib/short-lev/ibc/logs|' /opt/ibc/gatewaystart.sh
+```
+
+**These are lost on an IBC upgrade.** Re-apply after any reinstall.
+
+### The `-inline` flag is required
+
+By default `gatewaystart.sh` launches an `xterm` in the background and returns 0
+immediately -- systemd sees the main process exit and restarts every 30 seconds
+forever. `-inline` makes it `exec` in the foreground. The unit uses it.
+
+`PrivateTmp` must also be **false** on the Gateway unit: Xvfb's socket is in
+`/tmp/.X11-unix`, and a private `/tmp` namespace hides it.
+
+### IBC config
+
+Seed from IBC's own 975-line annotated file, **not** the repo template -- the
+template is a reference for which keys matter, not a complete config.
+
+```bash
+sudo cp /opt/ibc/config.ini /var/lib/short-lev/ibc/config.ini
+sudo chown short-lev:short-lev /var/lib/short-lev/ibc/config.ini
+sudo chmod 600 /var/lib/short-lev/ibc/config.ini
+sudo -u short-lev nano /var/lib/short-lev/ibc/config.ini
+```
+
+Set:
+
+| Key | Value | Why |
+|---|---|---|
+| `IbLoginId` | paper username | |
+| `IbPassword` | paper password | plaintext, on the box only |
+| `TradingMode` | `paper` | must agree with `IB_PORT` in `.env` |
+| `IbDir` | `/home/short-lev/Jts` | |
+| `AutoRestartTime` | `11:45 PM` | soft restart, no re-auth |
+| `IbAutoClosedown` | `no` | systemd owns lifecycle |
+| `AcceptNonBrokerageAccountWarning` | `yes` | paper disclaimer dialog |
+| `ReadOnlyLogin` | `no` | |
+| `ReadOnlyApi` | `yes` | **re-asserts read-only on every start** |
+| `AcceptIncomingConnectionAction` | `accept` | auto-handles the API connect dialog |
+| `DismissPasswordExpiryWarning` | `yes` | otherwise blocks headless |
+
+`ReadOnlyApi=yes` is the valuable one: it makes "the monitor cannot place orders"
+a property of config rather than a checkbox someone ticked. The IBC log confirms
+it each start with `Read-Only API checkbox is already set to: true`.
+
+### Gateway API settings
+
+These live in `~/Jts` and survive restarts, but **are lost if Gateway is
+reinstalled**. Set over VNC under Configure -> Settings -> API -> Settings:
 
 | Setting | Value |
 |---|---|
-| Read-Only API | **ON** |
 | Enable ActiveX and Socket Clients | **ON** |
 | Socket port | **4002** (paper) / 4001 (live) |
 | Trusted IPs | `127.0.0.1` |
 | Download open orders on connection | **OFF** |
 
-**Lock and Exit:** set **auto-restart**, not auto-logoff. This is what turns a
-daily login into a weekly one.
+Read-Only API is handled by IBC. Confirm the port is live with
+`sudo ss -tlnp | grep 4002`.
 
-Read-Only API stays ON through Phase 1c -- it makes "no order submission" a
-property of the broker rather than a promise in a spec.
-
-### First-run gate
-
-The **paper trading disclaimer** must be accepted once before the API will serve
-position data. Until then the API connects and immediately drops with
-`Error 10141: Paper trading disclaimer must first be accepted for API
-connection`, followed by a misleading `Peer closed connection. clientId 11
-already in use?` -- ignore the second, fix the first. Accept it under
-Configure -> Settings -> API -> Precautions.
+**First-run gate:** the paper trading disclaimer must be accepted once, or the
+API drops connections with `Error 10141` followed by a misleading
+`clientId 11 already in use?`. `AcceptNonBrokerageAccountWarning=yes` handles it
+going forward.
 
 ---
 
 ## 7. Authentication model
 
-**There are no IBKR credentials in this repo.** Gateway holds the authenticated
-session; the API socket on localhost requires no authentication. `.env` carries
-connection coordinates only.
+**No IBKR credential is in the repo.** One lives on the box, in IBC's config, so
+that restarts are unattended. Gateway holds the session; the API socket on
+localhost needs no authentication. `.env` carries connection coordinates only.
 
-**This box's disk is a different matter since IBC landed.** IBC needs the
-password in plaintext to type it into the login dialog, so it lives at
-`/var/lib/short-lev/ibc/config.ini`, `600`, owned by `short-lev`. That is a
-changed security posture, deliberately traded for unattended restarts -- see
-section 8.
-
-| Event | Frequency | Human needed |
+| Event | Frequency | Human |
 |---|---|---|
-| Monitor process | continuous | no |
+| Monitor | continuous | no |
 | Gateway soft restart | nightly ~23:45 ET | no |
-| Full re-auth | weekly, after Sun 01:00 ET | ~2 min via VNC |
-| Crash re-auth | rare, unpredictable | ~2 min via VNC |
+| Full re-auth | weekly, after Sun 01:00 ET | none observed so far |
+| Crash re-auth | rare | none observed so far |
 
-The weekly window falls Sunday morning with markets closed until Monday 09:30 --
-roughly 32 hours of slack.
+**Observed:** three paper logins including a genuine post-expiry weekly re-auth
+required **no 2FA**, and IBC drives them start to finish. **Do not assume this
+holds for live**, where IB Key is likely enforced -- IBC cannot approve 2FA.
 
-**Observed 2026-08-10:** the first login after the Sunday 01:00 ET expiry -- a
-genuine weekly re-auth -- required username and password only, **no 2FA**. Two
-consecutive paper logins now with no second factor. If this holds, IBC could
-automate the weekly login entirely and VNC becomes exception-only. **Do not plan
-around it for live**, where IB Key is likely enforced.
-
-If push notifications are unreliable, Gateway's challenge/response mode is more
-dependable -- it displays a challenge number, entered into IBKR Mobile's IB Key,
-and the response typed back. No dependence on notification delivery.
-
-**Only one session per credential** -- see Session collision above.
+The weekly window falls Sunday morning, markets closed until Monday 09:30 --
+about 32 hours of slack.
 
 ---
 
-## 8. Running things (systemd)
-
-Four units, all enabled, all surviving a reboot. **tmux was the old approach** --
-everything ran in a session named `gw` and died with the SSH connection, and
-nothing came back after a reboot. It is gone from normal operation; if you have
-an older copy of this doc, that is what changed.
-
-### The units
-
-| Unit | What it is | Depends on |
-|---|---|---|
-| `short-lev-xvfb` | virtual display `:10` | — |
-| `short-lev-gateway` | IB Gateway, logged in by IBC | xvfb |
-| `short-lev-vnc` | x11vnc on `:10`, loopback only | xvfb |
-| `short-lev-monitor` | the band monitor | gateway (ordering only) |
-
-```bash
-systemctl status short-lev-monitor
-sudo systemctl restart short-lev-monitor
-journalctl -u short-lev-monitor -f          # follow
-journalctl -u short-lev-monitor --since today
-journalctl -u short-lev-gateway -b          # this boot
-```
-
-**VNC is its own unit on purpose.** It attaches to the display, not to Gateway,
-so `systemctl restart short-lev-vnc` leaves Gateway logged in and the monitor
-connected. Folding it into the Gateway unit would mean a dead VNC forces a
-Gateway logout -- the exact failure this setup exists to avoid.
-
-**`After=` is ordering, not readiness.** systemd starts the monitor as soon as
-Gateway's *process* exists, which is well before Gateway is logged in and
-answering on 4002. The monitor's connect backoff handles that gap: one WARNING
-per retry, doubling from 10s to a 300s ceiling, never exits. A boot journal
-showing a few `connect failed: ... retrying in 10s` lines followed by
-`connected:` is the system working, not a fault.
-
-### Layout
+## 8. Application layout
 
 ```
-/opt/short_lev/                  repo, owned by short-lev
-/opt/short_lev/.env              chmod 600, never committed, never deployed
-/var/lib/short-lev/              monitor state -- OUTSIDE the repo
-/var/lib/short-lev/monitor.json      peak_equity
-/var/lib/short-lev/alert_state.json  alert dedup + last heartbeat date
-/var/lib/short-lev/events/           checks.jsonl, alerts.jsonl
-/var/lib/short-lev/ibc/config.ini    IBC credentials, 600
-/home/short-lev/Jts/             Gateway install and its settings
-/opt/ibc/                        IBC install
-/home/short-lev/.local/bin/uv    uv, installed per-user
+/opt/short_lev/              repo, owned by short-lev
+/opt/short_lev/.env          chmod 600, never committed
+/var/lib/short-lev/          ALL runtime state -- survives a re-clone
+  monitor.json               peak_equity
+  alert_state.json           alert dedup
+  events/                    checks.jsonl, alerts.jsonl
+  ibc/config.ini             THE IBKR PASSWORD. 600.
+  ibc/logs/                  IBC diagnostics
+/home/short-lev/Jts/ibgateway/1045/    Gateway
+/opt/ibc/                    IBC
 ```
 
-State lives in `/var/lib/short-lev` because it used to live in the checkout,
-where a re-clone or a destructive pull wiped `peak_equity` and **silently
-disabled the drawdown stop** -- a failure with no symptom. The monitor unit's
-`StateDirectory=short-lev` creates and chowns the directory, so there is no
-`mkdir` step.
+State is under `/var/lib` deliberately: a `git pull` or re-clone that wiped
+`peak_equity` would silently disable the drawdown stop. **Verified** -- the repo
+was deleted and re-cloned and the peak survived.
 
 ### `.env`
 
 ```
-POLYGON_API_KEY=<set>
+POLYGON_API_KEY=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+ALERT_REPEAT_MINUTES=60
+HEARTBEAT_HOUR=09:45
+EVENT_LOG_DIR=/var/lib/short-lev/events
 IB_HOST=127.0.0.1
+# 4002 paper gateway, 4001 live gateway
 IB_PORT=4002
 IB_CLIENT_ID=11
 IB_ACCOUNT=DU<redacted>
 MONITOR_BASE_CAPITAL=10000
-POLL_INTERVAL_SECONDS=900
-
 MONITOR_STATE_PATH=/var/lib/short-lev/monitor.json
 ALERT_STATE_PATH=/var/lib/short-lev/alert_state.json
-EVENT_LOG_DIR=/var/lib/short-lev/events
-
-TELEGRAM_BOT_TOKEN=<set>
-TELEGRAM_CHAT_ID=<set>
-ALERT_REPEAT_MINUTES=60
-HEARTBEAT_HOUR=09:45
+POLL_INTERVAL_SECONDS=900
 ```
 
-`IB_PORT` is the only thing separating paper from live -- the monitor logs port
-and account on every startup for this reason. `IB_CLIENT_ID=11` is deliberately
-not 0 or 1; every example script uses those, and a collision with a half-dead
-session fails the connect.
+> **No inline comments.** `IB_PORT=4002  # paper` is parsed as the whole string
+> and fails with `invalid literal for int()`. Comments go on their own line.
 
-`HEARTBEAT_HOUR` is **always read in ET**, whatever the box's timezone. It fires
-once inside a 30-minute window starting at that time, so a restart at 15:24 sends
-nothing -- a heartbeat at an arbitrary hour cannot tell you anything, because you
-can only notice silence if you know when to expect noise.
+`IB_PORT` is the only thing separating paper from live, which is why the monitor
+logs port and account on every start. `IB_CLIENT_ID=11` is deliberately not 0 or
+1 -- every example script uses those.
 
-The bot token is a full credential. `.env` stays at `600` and is never committed
-and never deployed from a laptop.
+### The units
 
-### IBC and the credential
+| Unit | Notes |
+|---|---|
+| `short-lev-xvfb` | display `:10`. Everything else `Requires=` it. |
+| `short-lev-gateway` | `gatewaystart.sh -inline`. `PrivateTmp=false`, `RestartSec=30`, looser hardening -- Gateway writes to `~/Jts`. |
+| `short-lev-vnc` | **separate on purpose.** Restarting VNC must not log Gateway out. |
+| `short-lev-monitor` | full hardening, `StateDirectory=short-lev`, `RestartSec=10`. |
 
-> **This box now holds an IBKR password.** `/var/lib/short-lev/ibc/config.ini`,
-> `600`, owned by `short-lev`. IBC needs it in plaintext to type it into
-> Gateway's login dialog, which is what makes an unattended reboot possible.
->
-> Until Phase 1d this machine held **zero** credentials (section 7). That
-> property was traded, deliberately, for restarts that need no human. It never
-> goes in the repo and never goes in a backup that leaves the box.
->
-> **Have this conversation again before running on an account you do not own.**
+`After=` is ordering, not readiness -- systemd starts the monitor once Gateway's
+*process* exists, well before it is logged in. The monitor's connect backoff is
+what handles that, and it works: on a cold boot it logs one WARNING, waits 10s,
+and connects. Do not try to fix this with unit ordering.
 
-`deploy/ibc-config.ini.template` is the committed template, credential fields
-blank. `install-units.sh` seeds it and never overwrites an existing one.
+### `uv` needs an absolute path
 
-**IBC cannot approve 2FA.** Paper logins have required none across three
-observations, including a genuine post-expiry weekly re-auth, so paper is
-hands-off. Do not assume that holds for live, where IB Key is likely enforced --
-if it is, the weekly login needs VNC and section 5 is how you get there.
-
-Gateway soft-restarts nightly at IBC's `AutoRestartTime` (11:45 PM) without
-re-authenticating, getting ahead of IBKR's own ~23:45 ET session reset. The
-monitor rides the gap out on its backoff and logs one INFO on recovery.
-
-### Install or reinstall the units
-
-```bash
-cd /opt/short_lev
-sudo deploy/install-units.sh
-```
-
-Idempotent: copies the four units, `daemon-reload`s, enables all four, and
-creates `/var/lib/short-lev`. It never touches an IBC config that already exists.
-
-### Deploy an update
-
-```bash
-ssh short-lev-01 'sudo -u short-lev /opt/short_lev/deploy/deploy.sh'
-```
-
-`git pull --ff-only` plus `uv sync`, then **it stops**. It prints the restart
-command rather than running it, because restarting interrupts monitor continuity
--- so it stays a chosen action, ideally outside market hours.
-
-Deliberately **not** wired to auto-deploy on push. No GitHub Actions, no deploy
-key, and specifically no `NOPASSWD: ALL` sudoers entry -- that pattern exists on
-the `hype_arb` box and should not be copied here.
+`sudo -u short-lev bash -c 'uv sync'` fails -- non-login shells don't source the
+profile. Use `/home/short-lev/.local/bin/uv`.
 
 ---
 
 ## 9. Rebuilding from scratch
 
-Ordered. **Do not paste as a block** -- anything following `ssh`, `sudo -u`, or
-`source` is swallowed by a shell that has not started yet.
+**Do not paste as a block.** Anything after `ssh`, `sudo -u`, or `source` is
+swallowed by a shell that hasn't started.
 
 ```bash
-# 1. Hetzner console: CPX 11, Ashburn, Ubuntu 22.04, SSH key added AT CREATION.
-#    Skipping the key means a root password by email -- a worse starting point.
+# 1. Hetzner: CPX 11, Ashburn, Ubuntu 22.04, SSH key added AT CREATION.
 
-# 2. First login, as root
-ssh root@<ip>
+# 2. ssh root@<ip>
 
 # 3. Swap
 fallocate -l 2G /swapfile && chmod 600 /swapfile
@@ -420,14 +418,13 @@ mkswap /swapfile && swapon /swapfile
 echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
 # 4. Admin user
-adduser owen
-usermod -aG sudo owen
+adduser owen && usermod -aG sudo,adm owen
 rsync --archive --chown=owen:owen ~/.ssh /home/owen
 
 # 5. >>> VERIFY `ssh owen@<ip>` AND `sudo -v` IN A SECOND TERMINAL <<<
-#    Do not proceed until both work. The next step is what locks you out.
+#     The next step is what locks you out.
 
-# 6. Harden SSH
+# 6. Harden
 sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 systemctl restart ssh
@@ -437,63 +434,92 @@ ufw default deny incoming && ufw default allow outgoing
 ufw allow OpenSSH && ufw enable
 timedatectl set-timezone America/New_York
 
-# 8. Tailscale -- before anything else; everything after is easier with it
+# 8. Tailscale -- first, everything after is easier with it
 curl -fsSL https://tailscale.com/install.sh | sh
-tailscale up --ssh          # blocks: open the printed URL, authenticate, wait
+tailscale up                 # blocks: open the printed URL, authenticate
 ufw allow in on tailscale0
-tailscale ip -4
 
-# 9. Display stack + JRE. No tmux: the stack runs under systemd (section 8).
+# 9. Packages. unzip IS required.
 apt update
-apt install -y xvfb x11vnc openjdk-17-jre unattended-upgrades
+apt install -y xvfb x11vnc openjdk-17-jre unattended-upgrades unzip
 
 # 10. Service user
 adduser --disabled-password --gecos "" short-lev
 mkdir -p /opt/short_lev && chown short-lev:short-lev /opt/short_lev
 
-# 11. As short-lev: Gateway (section 6), then repo
-#     No mkdir for state -- StateDirectory= creates /var/lib/short-lev.
-sudo -u short-lev -i
-cd /opt/short_lev
-git clone https://github.com/ohovey1/short_lev.git .
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc
-uv sync
-nano /opt/short_lev/.env && chmod 600 /opt/short_lev/.env
-exit
+# 11. Gateway -- NO -dir FLAG, then move into the layout IBC needs
+sudo -u short-lev bash -c 'cd ~ && wget https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/ibgateway-stable-standalone-linux-x64.sh && chmod +x ibgateway-stable-standalone-linux-x64.sh'
+sudo -u short-lev bash -c 'cd ~ && ./ibgateway-stable-standalone-linux-x64.sh -q'
+sudo -u short-lev bash -c 'mkdir -p ~/Jts/ibgateway && mv ~/ibgateway ~/Jts/ibgateway/1045'
+sudo -u short-lev bash -c 'ls ~/Jts/ibgateway/1045/jars | head -3'    # must list jars
 
-# 12. IBC, as root. Check the current release rather than assuming this URL.
+# 12. IBC. Check github.com/IbcAlpha/IBC/releases for current; 3.21.0+ required.
 mkdir -p /opt/ibc && cd /opt/ibc
-curl -LO https://github.com/IbcAlpha/IBC/releases/latest/download/IBCLinux-3.20.0.zip
-unzip IBCLinux-3.20.0.zip && chmod +x *.sh scripts/*.sh
+curl -LO https://github.com/IbcAlpha/IBC/releases/download/3.24.0/IBCLinux-3.24.0.zip
+unzip IBCLinux-3.24.0.zip && chmod +x *.sh scripts/*.sh
 chown -R short-lev:short-lev /opt/ibc
 
-# 13. Units + IBC config. Seeds /var/lib/short-lev/ibc/config.ini from the
-#     template with BLANK credentials; fill them in on the box only.
-cd /opt/short_lev && ./deploy/install-units.sh
-sudo -u short-lev nano /var/lib/short-lev/ibc/config.ini    # IbLoginId, IbPassword
-systemctl start short-lev-xvfb short-lev-gateway short-lev-vnc
+# 13. Patch gatewaystart.sh -- version, config path, log path (section 6)
+sed -i 's/^TWS_MAJOR_VRSN=.*/TWS_MAJOR_VRSN=1045/' /opt/ibc/gatewaystart.sh
+sed -i 's|^IBC_INI=.*|IBC_INI=/var/lib/short-lev/ibc/config.ini|' /opt/ibc/gatewaystart.sh
+sed -i 's|^LOG_PATH=.*|LOG_PATH=/var/lib/short-lev/ibc/logs|' /opt/ibc/gatewaystart.sh
 
-# 14. Update ~/.ssh/config locally: User root -> User owen
-# 15. Over VNC: confirm IBC logged Gateway in, accept the paper disclaimer,
-#     set API options (section 6). Then start the monitor:
-systemctl start short-lev-monitor && journalctl -u short-lev-monitor -f
+# 14. Repo
+sudo -u short-lev git clone https://github.com/ohovey1/short_lev.git /opt/short_lev
+sudo -u short-lev bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+sudo -u short-lev bash -c 'cd /opt/short_lev && /home/short-lev/.local/bin/uv sync'
+sudo -u short-lev nano /opt/short_lev/.env      # section 8. NO inline comments.
+chmod 600 /opt/short_lev/.env
+
+# 15. Units
+cd /opt/short_lev && bash deploy/install-units.sh
+
+# 16. IBC config -- seed from IBC's own file, not the template (section 6)
+cp /opt/ibc/config.ini /var/lib/short-lev/ibc/config.ini
+chown short-lev:short-lev /var/lib/short-lev/ibc/config.ini
+chmod 600 /var/lib/short-lev/ibc/config.ini
+sudo -u short-lev nano /var/lib/short-lev/ibc/config.ini
+mkdir -p /var/lib/short-lev/ibc/logs && chown -R short-lev:short-lev /var/lib/short-lev/ibc
+
+# 17. Start
+systemctl start short-lev-xvfb short-lev-gateway short-lev-vnc
+sleep 30 && tail -20 /var/lib/short-lev/ibc/logs/ibc-*.txt    # confirm IBC logged in
+
+# 18. Over VNC: set the Gateway API options (section 6). Confirm:
+ss -tlnp | grep 4002
+
+# 19. Monitor
+systemctl start short-lev-monitor
+journalctl -u short-lev-monitor -f -o cat
+
+# 20. Locally: ~/.ssh/config User root -> User owen
 ```
 
 ---
 
-## 10. Not yet built
+## 10. Troubleshooting
 
-Spec 007 shipped the systemd units, IBC, and the state relocation. What remains:
+| Symptom | Cause |
+|---|---|
+| Gateway restarts every 30s, exits 0 in 34ms | missing `-inline` |
+| `can't find jars folder` | Gateway not at `~/Jts/ibgateway/<vrsn>/`; don't use `-dir` |
+| `Invalid username or password` in the VNC window | wrong `IbPassword`; IBC log shows the login attempt |
+| `invalid literal for int()` | inline comment in `.env` |
+| `ConnectionRefusedError` on 4002 | Gateway API settings lost (reinstall) or still booting |
+| `Error 10141` then `clientId already in use?` | paper disclaimer; ignore the second error |
+| `-- No entries --` from journalctl | not in `adm` group; use sudo |
+| `uv: command not found` under `sudo -u` | use the absolute path |
+| VNC connects to nothing | tunnel terminal closed |
+| x11vnc on 5901 not 5900 | stale instance holds 5900 |
 
-- **Dashboard unit**, Tailscale-bound (`--server.address=$(tailscale ip -4)`), no
-  public port and no reverse proxy. Deliberately deferred: `app.py` is still a
-  backtest UI with no live data, so running it as a service would serve an empty
-  page. It becomes the right stakeholder surface once it reads live state.
-- **Backups** -- `peak_equity` is small and irreplaceable, and now that it lives
-  in `/var/lib/short-lev` it is outside anything git would restore. Nightly tar,
-  optional rsync to a Hetzner Storage Box, 30-day retention.
-- **Inbound Telegram commands.** Its own spec.
-- **External dead-man.** The heartbeat is one you must notice *missing*; if the
-  monitor dies at 02:00 you find out at 09:45. Acceptable while nothing executes,
-  not acceptable once an executor exists.
+---
+
+## 11. Not yet built
+
+- **Dashboard**, Tailscale-bound. The stakeholder-facing surface; `app.py` is
+  still a backtest UI.
+- **Backups** of `/var/lib/short-lev/` -- small, irreplaceable, currently none.
+- **Close public SSH** once all operators are on Tailscale.
+- **Multi-account.** One Gateway per IBKR login, so a second account means a
+  second display, port, IBC config, and unit set -- unless the accounts sit under
+  one advisor login, in which case one Gateway serves both.
