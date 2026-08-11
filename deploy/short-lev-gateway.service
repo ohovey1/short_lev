@@ -11,7 +11,13 @@ Type=simple
 User=short-lev
 Group=short-lev
 Environment=DISPLAY=:10
-ExecStart=/opt/ibc/gatewaystart.sh
+
+# -inline IS REQUIRED. Without it gatewaystart.sh launches an xterm in the
+# background and returns 0 in about 34ms. systemd sees the main process exit,
+# Restart=always fires, and the unit restarts every 30 seconds forever while
+# Gateway itself is fine. -inline makes the script exec in the foreground so the
+# unit tracks the real process. Do not remove it.
+ExecStart=/opt/ibc/gatewaystart.sh -inline
 Restart=always
 
 # 30, not 10. A Gateway that is failing because it needs fresh authentication is
@@ -24,7 +30,13 @@ RestartSec=30
 # ProtectHome=read-only breaks it. That is a real constraint, not an oversight:
 # do not "tighten" this to match short-lev-monitor.service.
 NoNewPrivileges=true
-PrivateTmp=true
+
+# MUST be false. Xvfb's socket lives in /tmp/.X11-unix, and PrivateTmp gives the
+# unit its own /tmp namespace where that socket does not exist -- Gateway then
+# cannot reach the display at all. The monitor keeps PrivateTmp=true because it
+# never touches X. Do not "tighten" this one to match.
+PrivateTmp=false
+
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
