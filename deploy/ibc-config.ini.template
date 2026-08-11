@@ -1,13 +1,19 @@
-# IBC configuration TEMPLATE. Committed. Credential fields are BLANK and stay
-# blank in this file -- it lives in the repo.
+# REFERENCE, NOT A CONFIG. These are the keys that matter for this deployment
+# and the values they need. This file is deliberately NOT a complete config.ini
+# and must not be copied into place as one.
 #
-# On the box:
+# THE REAL CONFIG IS SEEDED FROM IBC'S OWN FILE -- /opt/ibc/config.ini, 975 lines
+# of annotated defaults -- and these values are then set in it:
 #
-#   sudo install -d -o short-lev -g short-lev -m 700 /var/lib/short-lev/ibc
-#   sudo cp deploy/ibc-config.ini.template /var/lib/short-lev/ibc/config.ini
+#   sudo cp /opt/ibc/config.ini /var/lib/short-lev/ibc/config.ini
 #   sudo chown short-lev:short-lev /var/lib/short-lev/ibc/config.ini
 #   sudo chmod 600 /var/lib/short-lev/ibc/config.ini
-#   sudo -u short-lev nano /var/lib/short-lev/ibc/config.ini   # fill in the two
+#   sudo -u short-lev nano /var/lib/short-lev/ibc/config.ini
+#
+# A hand-written 52-line config was what we tried first. It is not the supported
+# path: IBC reads keys this file never mentions, and a missing one fails in ways
+# that do not point back here. Seed from IBC's file, edit the keys below.
+# docs/VPS.md section 6 is the operational version of this.
 #
 # THE FILLED-IN FILE CONTAINS THE IBKR PASSWORD IN PLAINTEXT. That is what IBC
 # needs to type it into Gateway's login dialog. It belongs at 600, owned by
@@ -19,6 +25,8 @@
 # IBC CANNOT APPROVE 2FA. Paper logins have required none across three
 # observations, including a genuine post-expiry weekly re-auth. Do not assume it
 # holds for live, where IB Key is likely enforced.
+#
+# Version pinning is NOT here -- see the Gateway location section below.
 
 # --- Credentials: fill in ON THE BOX, never here -----------------------------
 IbLoginId=
@@ -29,11 +37,18 @@ IbPassword=
 TradingMode=paper
 
 # --- Gateway location --------------------------------------------------------
-# Pinned rather than auto-detected: IBC picks the highest installed version
-# otherwise, so an auto-update to a version Gateway has not been logged into
-# silently changes what starts.
+# IBC needs <IbDir>/ibgateway/<version>/jars to exist -- ibcstart.sh builds that
+# path directly and fails with "can't find jars folder" otherwise. Do NOT pass
+# -dir to the Gateway installer; it flattens the version subdirectory away.
 IbDir=/home/short-lev/Jts
-IbGatewayVersionMajor=1045
+
+# VERSION PINNING IS NOT A CONFIG KEY. There is no IbGatewayVersionMajor in
+# config.ini -- setting one does nothing at all, silently. The version comes from
+# TWS_MAJOR_VRSN in /opt/ibc/gatewaystart.sh, which ships defaulted to whatever
+# was current when that IBC release was cut (3.24.0 ships 1019, Gateway here is
+# 1045). That script also overrides IBC_INI and LOG_PATH unconditionally, so the
+# unit's Environment= cannot set them either. All three are patched in the
+# script, and all three are lost on an IBC upgrade -- see docs/VPS.md section 6.
 
 # --- Restart behaviour -------------------------------------------------------
 # Soft-restart nightly WITHOUT re-authentication, which is the whole point: IBKR
@@ -45,8 +60,22 @@ AutoRestartTime=11:45 PM
 # exits, the unit restarts it (RestartSec=30) and IBC logs back in.
 IbAutoClosedown=no
 
-# Accept the read-only-API and paper-trading dialogs that otherwise block the
-# API socket until someone clicks them over VNC. This is the gate that produced
-# "Error 10141: paper trading disclaimer must first be accepted".
+# --- Dialogs that would otherwise block a headless start ---------------------
+# Each of these is a window someone has to click over VNC if IBC does not handle
+# it. AcceptNonBrokerageAccountWarning is the paper-trading disclaimer -- the
+# gate that produced "Error 10141: paper trading disclaimer must first be
+# accepted" followed by a misleading "clientId already in use?".
 AcceptNonBrokerageAccountWarning=yes
+DismissPasswordExpiryWarning=yes
+AcceptIncomingConnectionAction=accept
 ReadOnlyLogin=no
+
+# --- Read-only API -----------------------------------------------------------
+# The valuable one. This re-asserts the Read-Only API checkbox on EVERY start,
+# which makes "the monitor cannot place orders" a property of configuration
+# rather than a checkbox someone once ticked in the GUI. Confirmed working: the
+# IBC log says "Read-Only API checkbox is already set to: true" each start.
+ReadOnlyApi=yes
+
+# Deliberately NOT set here: PasswordEncrypted and LogToConsole. Neither key
+# exists in IBC 3.24.0 -- they are inventions, and IBC ignores them silently.

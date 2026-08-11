@@ -14,6 +14,7 @@ set -euo pipefail
 UNIT_DIR=/etc/systemd/system
 STATE_DIR=/var/lib/short-lev
 IBC_CONFIG="$STATE_DIR/ibc/config.ini"
+IBC_STOCK_CONFIG=/opt/ibc/config.ini
 SERVICE_USER=short-lev
 
 UNITS=(
@@ -45,14 +46,21 @@ done
 # has to exist before Gateway first runs, so create it here too.
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 700 "$STATE_DIR" "$STATE_DIR/ibc"
 
+# Seed from IBC'S OWN 975-line annotated config, never from the repo template.
+# The template is a reference for which keys matter, not a complete config --
+# a hand-written one was tried first and is not the supported path: IBC reads
+# keys the template never mentions. See deploy/ibc-config.ini.template.
 seeded=false
 if [[ -e "$IBC_CONFIG" ]]; then
     echo "IBC config already present at $IBC_CONFIG -- left untouched"
-else
+elif [[ -e "$IBC_STOCK_CONFIG" ]]; then
     install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 600 \
-        "$here/ibc-config.ini.template" "$IBC_CONFIG"
+        "$IBC_STOCK_CONFIG" "$IBC_CONFIG"
     seeded=true
-    echo "seeded $IBC_CONFIG from the template"
+    echo "seeded $IBC_CONFIG from $IBC_STOCK_CONFIG"
+else
+    echo "WARNING: $IBC_STOCK_CONFIG not found -- is IBC installed at /opt/ibc?"
+    echo "         Create $IBC_CONFIG by hand from IBC's config.ini before starting Gateway."
 fi
 
 systemctl daemon-reload
@@ -64,13 +72,17 @@ echo "enabled: ${UNITS[*]}"
 if [[ "$seeded" == true ]]; then
     cat <<EOF
 
-NEXT: the IBC config has BLANK credentials and Gateway will not log in until
-they are filled in.
+NEXT: that is IBC's stock config. Gateway will not log in until the keys in
+deploy/ibc-config.ini.template are set in it -- credentials, TradingMode,
+IbDir, AutoRestartTime, ReadOnlyApi, and the dialog-dismissal keys.
 
-    sudo -u $SERVICE_USER nano $IBC_CONFIG      # set IbLoginId and IbPassword
+    sudo -u $SERVICE_USER nano $IBC_CONFIG
 
 That file holds the IBKR password in plaintext at 600. It never goes in the
 repo and never goes in a backup that leaves this box.
+
+Version pinning is NOT in that file -- patch TWS_MAJOR_VRSN, IBC_INI, and
+LOG_PATH in /opt/ibc/gatewaystart.sh. See docs/VPS.md section 6.
 EOF
 fi
 
