@@ -218,8 +218,10 @@ not commit until I have reviewed the diff.
 
 ## Result
 
-**Offline gates pass. Gates 1-8 are live and not yet run** -- they need the box,
-and gate 8 needs a night. Same split as spec 006.
+**Gates 1-5, 7, and 9 pass. Gates 6 and 8 deferred to the overnight window.**
+
+This section was first written before the box work and recorded only the offline
+half; everything under "The live run" below was added after the gate run.
 
 Gate 9 passes: `verify_band.py`, `verify_engine.py`, and `verify_monitor.py` all
 green, and `hash_band.py`'s GRAND digest is
@@ -290,13 +292,79 @@ Also confirmed by hand: an ET-aware `last_sent_ts` round-trips through the state
 file with its offset, the repeat timer honors it, the heartbeat fires once per
 day, and the 2026-11-01 DST fall-back does not break the window.
 
+---
+
+## The live run
+
+### Gates
+
+| Gate | Result |
+|---|---|
+| 1. Unattended reboot | **PASS.** Cold reboot, all four units active, IBC logged Gateway in with nobody involved. |
+| 2. Monitor waits rather than crash-looping | **PASS.** One WARNING, 10s backoff, connected 11 seconds after boot. No traceback, no repeated exits. Item 1's fix is what made this work. |
+| 3. VNC restarts independently | **PASS.** VNC restarted; Gateway untouched; the monitor never noticed. Vindicates the separate-unit decision. |
+| 4. Gateway restart survived | **PASS.** Disconnect logged as one line, no traceback; reconnected in 10s unattended. |
+| 5. State survives a re-clone | **PASS.** `/opt/short_lev` deleted and re-cloned; `peak_equity=10507.95` survived in `/var/lib/short-lev`. |
+| 6. Heartbeat respects the hour | **DEFERRED** to the overnight window. |
+| 7. Credentials locked down | **PASS.** `config.ini` is `600 short-lev`; no filled-in password anywhere in the repo. |
+| 8. Nightly restart | **DEFERRED** to the overnight window. The real gate, still unrun. |
+| 9. Offline suite + hash | **PASS.** See above. |
+
+### Five failures during setup -- none of them in the code
+
+1. **`-dir /home/short-lev/Jts` on the original Gateway install.** It flattened
+   the version subdirectory away. IBC builds the path as
+   `<tws_path>/ibgateway/<vrsn>/jars` (`ibcstart.sh` line 241) and failed with
+   "can't find jars folder". **Root cause of the whole evening** -- everything
+   else was found while chasing this.
+2. **Missing `-inline`.** `gatewaystart.sh` launches an xterm in the background
+   and returns 0 in ~34ms, so systemd saw the main process exit and restarted
+   every 30s forever.
+3. **`PrivateTmp=true` on the Gateway unit.** Xvfb's socket is in
+   `/tmp/.X11-unix`; a private `/tmp` namespace hides it.
+4. **Inline comment on `IB_PORT` in `.env`** -> `invalid literal for int()`.
+   python-dotenv does not strip trailing comments from an unquoted value.
+5. **`TWS_MAJOR_VRSN` shipped as `1019`**; Gateway here is 1045.
+
+2 and 3 are fixed in `deploy/short-lev-gateway.service`. 1, 4, and 5 are
+box-side and documented in `docs/VPS.md`.
+
+### Also learned
+
+- **IBC 3.20.0 -- the version this spec named -- cannot work with Gateway 1045.**
+  Gateway 1034+ on Linux moved to the Azul Zulu 17 JRE and support arrived in IBC
+  3.21.0. Avoid 3.21.0 for its autorestart bug; **3.24.0** is what works here.
+- **`gatewaystart.sh` overrides `IBC_INI` and `LOG_PATH` unconditionally**, so
+  the unit's `Environment=` has no effect on either. All three -- those two plus
+  `TWS_MAJOR_VRSN` -- are patched directly in the script, **and all three are lost
+  on an IBC upgrade.**
+- **`uv` needs an absolute path under `sudo -u ... bash -c`.** Non-login shells
+  do not source the profile.
+- **`unzip` was not installed.** Added to the package list.
+- **`ReadOnlyApi=yes` confirmed working.** IBC logs "Read-Only API checkbox is
+  already set to: true" on every start, which makes the no-orders property a
+  matter of configuration rather than a checkbox someone once ticked.
+
+### Repo reconciliation
+
+The box needed five hand-fixes that were not reflected in the repo, so a rebuild
+from `main` would have failed. Reconciled afterwards: the two Gateway unit fixes,
+the executable bit on both deploy scripts (committed `100644`, so
+`sudo deploy/install-units.sh` failed with "command not found"), the IBC template
+corrections, and a full replacement of `docs/VPS.md`.
+
+`install-units.sh` was also changed to seed the IBC config from
+`/opt/ibc/config.ini` rather than from the repo template -- it was still copying
+the template into place, which is the unsupported path the template now warns
+against.
+
 ### Deferred
 
-- **The IBC download URL in section 9 step 12 is unverified.** Written against
-  `IBCLinux-3.20.0.zip`; check the current release before pasting it.
+- Gates 6 and 8, both needing the overnight window.
 - Dashboard unit, inbound Telegram commands, external dead-man, backups of
-  `/var/lib/short-lev` -- all still out of scope, now listed in VPS.md section 10.
+  `/var/lib/short-lev` -- all still out of scope, now listed in VPS.md section 11.
 - `PAIR_KEY` is still hardcoded `"TSLL"`.
+- **IBC's maintainer has said he is stepping away.** Logged as a dependency risk.
 
 ### Note for the live run
 
