@@ -250,6 +250,63 @@ price files by ticker list, or move the borrow files out of cache/ someday.
 
 ---
 
+### 2026-08-10 (specs 006 + 007: Telegram sink, then systemd/IBC and the live box)
+**Spec:** `specs/spec_006.md`, `specs/spec_007.md`
+
+**Shipped:**
+- **Spec 006 -- the Telegram sink.** Three new modules: `events.py` (append-only
+  JSONL, `checks.jsonl` + `alerts.jsonl`, one line per check whether it tripped or
+  not), `notify.py` (the sink, ported from `hype_arb`; a no-op when unconfigured,
+  never crashes the monitor), `alert_state.py` (dedup: send on transition, re-send
+  hourly while standing, one INFO on resolution). Plus the trade-line arithmetic
+  fix -- every dollar figure now derives from the ROUNDED share count, with the
+  residual shown rather than papered over.
+- **Spec 007 -- unattended operation.** `connect_with_backoff()` so the initial
+  connect retries instead of exiting; the heartbeat moved to ET with a 30-minute
+  window; all runtime state relocated to `/var/lib/short-lev`; four systemd units;
+  IBC; two deploy scripts. Gates 1-5, 7, 9 pass. 6 and 8 wait for the overnight
+  window.
+
+**Surprised us:**
+- **The evening was one root cause wearing five masks.** `-dir ~/Jts` on the
+  original Gateway install flattened the version subdirectory, and IBC needs
+  `<IbDir>/ibgateway/<vrsn>/jars` exactly. Everything else -- the missing
+  `-inline`, `PrivateTmp`, the `.env` inline comment, `TWS_MAJOR_VRSN=1019` --
+  was found while chasing "can't find jars folder".
+- **None of the five failures were in the code.** The two code fixes written
+  blind against the spec (the connect backoff, the heartbeat window) both worked
+  first time on the box. Gate 2 passed *because* of item 1: one WARNING, 10s
+  backoff, connected 11 seconds after a cold boot.
+- **A unit that "works" can be restarting every 30 seconds.** Without `-inline`,
+  `gatewaystart.sh` returns 0 in ~34ms and systemd restarts it forever while
+  Gateway itself is fine. `systemctl status` looks healthy at a glance.
+- **The spec named an IBC version that cannot work.** 3.20.0 predates Gateway
+  1034+'s move to the Azul Zulu 17 JRE. Writing a version number into a spec
+  ahead of the work is a guess wearing a fact's clothes.
+- **`IbGatewayVersionMajor` is not a config key.** It was in our template doing
+  nothing, silently. Version pinning lives in `gatewaystart.sh`, which also
+  overrides `IBC_INI` and `LOG_PATH` unconditionally -- so the unit's
+  `Environment=` cannot set them either.
+- **Spec 006's heartbeat diagnosis was wrong, and the test caught the fix.** The
+  hour gate already existed; the defect was that it was open-ended. Then the
+  planned one-directional tz coercion broke `check_n`, which passes a naive
+  `now` -- the useful signal that a dedup ledger must never be able to take the
+  monitor down in either direction.
+- **The repo drifted from the box in one evening.** Five hand-fixes, none of them
+  written back, and a rebuild from `main` would have failed. Reconciled the same
+  day; the executable bit on the deploy scripts is the kind of thing that only
+  shows up on a machine that runs them.
+
+**Next:**
+- Gates 6 and 8 overnight. Gate 8 is the real one -- the nightly `AutoRestartTime`
+  restart with nobody watching.
+- Confirm `/var/lib/short-lev/alert_state.json` actually persists
+  `last_heartbeat_date` (spec 006 saw it fire twice in 33 minutes).
+- Backups of `/var/lib/short-lev`: `peak_equity` is small, irreplaceable, and
+  currently unbacked.
+
+---
+
 ## Session template (copy this)
 
 ### YYYY-MM-DD (spec NNN: one-line description)
