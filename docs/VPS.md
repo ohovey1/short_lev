@@ -1,7 +1,7 @@
 # VPS Operations -- `short-lev-01`
 
 The box that runs IB Gateway and the short_lev monitor.
-Verified working 2026-08-10, after spec 007.
+Verified working 2026-08-13, after spec 008.
 
 ---
 
@@ -15,16 +15,29 @@ sudo -u short-lev -i             # switch to the service account
 exit                             # back out
 ```
 
+**Edit `.env`**
+
+```bash
+sudo -u short-lev -i
+nano /opt/short_lev/.env
+exit
+sudo systemctl restart short-lev-monitor short-lev-bot
+```
+
+Both units read `.env` only at start, so a changed path or chat id needs BOTH
+restarted, not just the monitor.
+
 **Check everything is alive**
 
 ```bash
-sudo systemctl status short-lev-xvfb short-lev-gateway short-lev-vnc short-lev-monitor --no-pager | grep -E "●|Active:"
+sudo systemctl status short-lev-xvfb short-lev-gateway short-lev-vnc short-lev-monitor short-lev-bot --no-pager | grep -E "●|Active:"
 ```
 
-**Watch the monitor**
+**Watch the monitor (or the bot)**
 
 ```bash
 sudo journalctl -u short-lev-monitor -f -o cat
+sudo journalctl -u short-lev-bot -f -o cat
 ```
 
 **Look at Gateway's screen** (weekly login, or when something needs eyes)
@@ -38,13 +51,19 @@ Then TigerVNC -> `localhost:5900`.
 
 ```bash
 sudo -u short-lev /opt/short_lev/deploy/deploy.sh
-sudo systemctl restart short-lev-monitor   # only when you choose to
+sudo systemctl restart short-lev-monitor short-lev-bot   # only when you choose to
 ```
+
+A NEW unit file requires `sudo deploy/install-units.sh` -- `git pull` and
+`deploy.sh` do not install units, and systemd reports `Unit ... could not be
+found` until it runs. This happened 2026-08-13 with `short-lev-bot` and cost a
+debugging round trip.
 
 **Restart something**
 
 ```bash
 sudo systemctl restart short-lev-monitor   # safe any time
+sudo systemctl restart short-lev-bot       # safe any time: no Gateway, no IBKR connection
 sudo systemctl restart short-lev-vnc       # safe: does not touch Gateway
 sudo systemctl restart short-lev-gateway   # IBC logs back in; monitor reconnects in ~10s
 ```
