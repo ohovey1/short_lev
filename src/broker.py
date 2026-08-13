@@ -246,18 +246,29 @@ def read_position(ib, pair_key, target, peak_equity):
     )
 
 
-def leg_prices(ib, pair_key):
-    """Return {ticker: marketPrice} for both legs, for share-count arithmetic.
+def leg_details(ib, pair_key):
+    """Return {ticker: {price, shares, avg_cost}} for both legs.
 
     Separate from read_position because it is presentation, not decision input:
-    the decision is made entirely in notional dollars, and price only matters
-    when converting a dollar delta into "buy 43 TSLA".
+    the decision is made entirely in notional dollars, and these fields only
+    matter when converting a dollar delta into "buy 43 TSLA" or reporting the
+    legs over Telegram. shares is the positive magnitude -- the sign was
+    already asserted (or the leg rejected) by read_position.
+
+    This is also how the poller sees share counts and marks: they ride out in
+    the widened checks.jsonl record rather than the poller asking IBKR, which
+    is what keeps exactly one process holding a connection.
     """
     pair = config.PAIRS[pair_key]
     account = os.environ.get("IB_ACCOUNT") or None
-    prices = {}
+    details = {}
     for ticker in (pair["leveraged_ticker"], pair["underlying_ticker"]):
         item = _leg(ib, ticker, account)
-        if item is not None and item.marketPrice:
-            prices[ticker] = item.marketPrice
-    return prices
+        if item is None:
+            continue
+        details[ticker] = {
+            "price": item.marketPrice or None,
+            "shares": abs(item.position),
+            "avg_cost": getattr(item, "averageCost", None),
+        }
+    return details
