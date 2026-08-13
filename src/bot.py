@@ -271,6 +271,15 @@ def build_status(runtime, now, poll_seconds, alerting_configured=True):
         f"yes, since {_fmt_et(connect_ts)}" if runtime.get("connected")
         else "NO -- reconnect in progress"
     )
+    # Rail b (spec 009 prep): the submission gate's verdict, as the monitor
+    # last wrote it. "not reported" means a pre-rails monitor is running.
+    ex = runtime.get("execution") or None
+    if ex:
+        execution_line = (f"{(ex.get('mode') or 'unknown').replace('_', ' ')}"
+                          f" -- {ex.get('reason', '')}")
+    else:
+        execution_line = "not reported"
+
     block = "\n".join([
         f"connected    {connected_line}",
         f"uptime       {uptime} (started {_fmt_et(runtime.get('started_at'))})",
@@ -279,6 +288,7 @@ def build_status(runtime, now, poll_seconds, alerting_configured=True):
         f"({_fmt_age(_age_seconds(runtime.get('last_check_ts'), now))})",
         f"last error   {error_line}",
         f"alerting     {'configured' if alerting_configured else 'NOT configured'}",
+        f"execution    {execution_line}",
     ])
     return _assemble(now, poll_seconds, runtime.get("last_check_ts"),
                      header, block)

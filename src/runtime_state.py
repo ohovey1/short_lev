@@ -23,7 +23,7 @@ DEFAULT_RUNTIME_PATH = os.path.join(
 )
 
 FIELDS = ("started_at", "last_check_ts", "last_connect_ts",
-          "cycles_since_start", "connected", "last_error")
+          "cycles_since_start", "connected", "last_error", "execution")
 
 
 def runtime_path():

@@ -246,6 +246,38 @@ def read_position(ib, pair_key, target, peak_equity):
     )
 
 
+def open_orders(ib):
+    """Every working order the API can see, summarised for the orphan check.
+
+    A read, not an action -- safe in Read-Only API mode. reqAllOpenOrders
+    covers orders from every API client id AND tickets entered by hand in the
+    TWS/Gateway UI, which is exactly the population that matters: this repo
+    submits nothing, so ANY working order on the account is one the monitor
+    cannot account for.
+
+    Returns a list of plain-dict summaries, or None when the query itself
+    failed -- the caller must treat None as "unknown", not as "none found".
+    """
+    try:
+        trades = ib.reqAllOpenOrders()
+    except Exception as exc:
+        log.error("open-order query failed: %s: %s -- orphan state UNKNOWN",
+                  type(exc).__name__, exc)
+        return None
+
+    return [{
+        "symbol": t.contract.symbol,
+        "action": t.order.action,
+        "quantity": t.order.totalQuantity,
+        "order_type": t.order.orderType,
+        "limit_price": getattr(t.order, "lmtPrice", None),
+        "status": t.orderStatus.status,
+        "perm_id": t.order.permId,
+        "client_id": t.order.clientId,
+        "order_ref": t.order.orderRef or None,
+    } for t in trades]
+
+
 def leg_details(ib, pair_key):
     """Return {ticker: {price, shares, avg_cost}} for both legs.
 

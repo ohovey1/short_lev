@@ -49,6 +49,7 @@ import broker
 import config
 import decision
 import events
+import execution
 import monitor_state
 import notify
 import orders
@@ -552,6 +553,51 @@ def check_record(state, d, unactionable, params, details, ts):
     }
 
 
+def orphan_scan(ib, send):
+    """Working orders found at connect time. Spec 009 rail c.
+
+    Restarts are routine under Restart=always, and orphaned working orders are
+    the classic executor bug -- so any order the API can see gets one CRITICAL
+    log per order, one CRITICAL alert, and the flag file that blocks
+    submission until a human reconciles and deletes it. Nothing is cancelled:
+    this repo submits nothing and cancels nothing.
+
+    A failed query is treated as UNKNOWN, not as clean -- it is logged at
+    ERROR but not flagged, because wedging submission on every transient read
+    error would train people to clear the flag reflexively, which is worse
+    than the flag not existing. Flagged only on confirmed orphans.
+    """
+    found = broker.open_orders(ib)
+    if found is None:
+        log.error(
+            "orphan check: open-order query failed; state UNKNOWN. Not "
+            "flagging on a failed read, but do not trust the account to be "
+            "order-free either.")
+        return False
+    if not found:
+        log.info("orphan check: no working orders at connect")
+        return False
+
+    flag = execution.flag_orphans(found)
+    log.critical(
+        "ORPHAN CHECK: %d working order(s) at connect that this process "
+        "cannot account for. Submission blocked until a human reconciles "
+        "them and deletes %s.", len(found), flag)
+    lines = []
+    for o in found:
+        line = (f"{o['symbol']} {o['action']} {o['quantity']:g} "
+                f"{o['order_type']} status={o['status']} "
+                f"clientId={o['client_id']} ref={o['order_ref'] or '-'}")
+        log.critical("  %s", line)
+        lines.append(line)
+    send("CRITICAL", "orphan orders",
+         f"{PAIR_KEY} -- working orders found at connect",
+         "Working orders exist on the account that this monitor did not "
+         "place (it places none). Submission is blocked until a human "
+         "reconciles them and deletes the flag file.\n\n" + "\n".join(lines))
+    return True
+
+
 def connect_with_backoff(backoff=RECONNECT_BACKOFF_START):
     """Connect, retrying forever with exponential backoff. Never raises.
 
@@ -643,6 +689,17 @@ def run():
     log.info(
         "approval: intents=%s seen=%d consumed marketable_offset=%.0fbp",
         intents_p, len(seen), marketable_offset * 1e4,
+    )
+
+    # Rail b: the execution state is logged on every startup, and refreshed
+    # into runtime.json each cycle so /status reports it. Nothing consults
+    # the gate to act yet -- the executor path is spec 009's.
+    gate = execution.submission_gate()
+    log.info(
+        "execution: mode=%s -- %s (halt=%s orphan_flag=%s "
+        "max_order_multiple=%g)",
+        gate.mode, gate.reason, execution.halt_path(),
+        execution.orphan_flag_path(), execution.max_order_multiple(),
     )
 
     def send(severity, kind, title, body, reply_markup=None):
@@ -982,6 +1039,7 @@ def run():
         "cycles_since_start": 0,
         "connected": False,
         "last_error": None,
+        "execution": {"mode": gate.mode, "reason": gate.reason},
     }
 
     backoff = RECONNECT_BACKOFF_START
@@ -989,6 +1047,7 @@ def run():
     runtime["last_connect_ts"] = events.now_iso()
     runtime["connected"] = True
     runtime_state.write(rt_path, runtime)
+    orphan_scan(ib, send)
     checked_sanity = False
     was_connected = True
     checks_since_heartbeat = 0
@@ -1011,6 +1070,10 @@ def run():
                 runtime["last_connect_ts"] = events.now_iso()
                 runtime["connected"] = True
                 runtime_state.write(rt_path, runtime)
+                # Every connect gets the orphan check, not just the first:
+                # the nightly session reset is precisely when a working order
+                # left by hand would be discovered.
+                orphan_scan(ib, send)
                 continue
 
             if not was_connected:
@@ -1094,6 +1157,10 @@ def run():
             runtime["last_check_ts"] = check_ts
             runtime["cycles_since_start"] += 1
             runtime["connected"] = True
+            # Re-evaluated each cycle, not frozen at startup: a HALT file
+            # touched mid-incident must show up in /status within one poll.
+            gate = execution.submission_gate()
+            runtime["execution"] = {"mode": gate.mode, "reason": gate.reason}
             runtime_state.write(rt_path, runtime)
 
             now = datetime.datetime.now(ET)

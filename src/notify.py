@@ -103,6 +103,10 @@ ALERT_KINDS = tuple(
     [{"name": name, "severity": TRIGGER_SEVERITY[name],
       "meaning": _TRIP_MEANINGS[name]} for name in TRIGGER_SEVERITY]
     + [
+        {"name": "orphan orders", "severity": "CRITICAL",
+         "meaning": "Working orders exist on the account that the monitor "
+                    "did not place (it places none). Submission stays "
+                    "blocked until a human reconciles them."},
         {"name": "sanity", "severity": "WARNING",
          "meaning": "base_capital exceeds NLV -- a sizing input is wrong, and "
                     "band trips are suppressed as unactionable while it holds."},

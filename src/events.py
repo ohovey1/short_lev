@@ -83,7 +83,10 @@ def log_command(record):
 
 
 def log_order(record):
-    """One line per proposed ticket. Nothing in this repo submits orders; a
-    status other than "placeholder" here would be a bug, not a feature."""
+    """One line per proposed ticket. Nothing in this repo submits orders.
+    Three statuses exist: "placeholder" (the approval loop's terminal step),
+    "dry_run" (the executor path rehearsed everything and sent nothing), and
+    "refused" (a rail said no -- the reason rides in the row). Any other
+    status would be a bug until spec 009 deliberately adds a live one."""
     record.setdefault("ts", now_iso())
     _append(ORDERS_FILE, record)

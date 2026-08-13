@@ -199,7 +199,9 @@ def check_d():
                    for k in notify.ALERT_KINDS)
     ]
     closing = "missing heartbeat matters more" in help_text
-    ok = (len(notify.ALERT_KINDS) == 10 and not missing
+    # Ten rows from spec 008 (nine kinds, leg_check twice) plus the spec 009
+    # orphan-orders CRITICAL the connect-time scan can now send.
+    ok = (len(notify.ALERT_KINDS) == 11 and not missing
           and not trip_mismatches and closing)
     return check("d. gate 4: /help covers all nine kinds from TRIGGER_SEVERITY's table",
                  ok, f"{len(notify.ALERT_KINDS)} kinds, missing from help: "
