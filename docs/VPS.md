@@ -343,7 +343,13 @@ about 32 hours of slack.
 /var/lib/short-lev/          ALL runtime state -- survives a re-clone
   monitor.json               peak_equity
   alert_state.json           alert dedup
-  events/                    checks.jsonl, alerts.jsonl
+  runtime.json               monitor health, read by the bot's /status
+  bot_offset.json            the bot's getUpdates cursor
+  intents.jsonl              button presses, bot -> monitor
+  intents_seen.json          consumed intent ids
+  approval_state.json        active proposal + trip message ids
+  events/                    checks.jsonl, alerts.jsonl, commands.jsonl,
+                             orders.jsonl (proposals only -- never real orders)
   ibc/config.ini             THE IBKR PASSWORD. 600.
   ibc/logs/                  IBC diagnostics
 /home/short-lev/Jts/ibgateway/1045/    Gateway
@@ -372,6 +378,13 @@ MONITOR_BASE_CAPITAL=10000
 MONITOR_STATE_PATH=/var/lib/short-lev/monitor.json
 ALERT_STATE_PATH=/var/lib/short-lev/alert_state.json
 POLL_INTERVAL_SECONDS=900
+TELEGRAM_ACTION_USER_IDS=
+MARKETABLE_OFFSET_BP=25
+RUNTIME_STATE_PATH=/var/lib/short-lev/runtime.json
+BOT_OFFSET_PATH=/var/lib/short-lev/bot_offset.json
+INTENTS_PATH=/var/lib/short-lev/intents.jsonl
+INTENTS_SEEN_PATH=/var/lib/short-lev/intents_seen.json
+APPROVAL_STATE_PATH=/var/lib/short-lev/approval_state.json
 ```
 
 > **No inline comments.** `IB_PORT=4002  # paper` is parsed as the whole string
@@ -389,6 +402,18 @@ logs port and account on every start. `IB_CLIENT_ID=11` is deliberately not 0 or
 | `short-lev-gateway` | `gatewaystart.sh -inline`. `PrivateTmp=false`, `RestartSec=30`, looser hardening -- Gateway writes to `~/Jts`. |
 | `short-lev-vnc` | **separate on purpose.** Restarting VNC must not log Gateway out. |
 | `short-lev-monitor` | full hardening, `StateDirectory=short-lev`, `RestartSec=10`. |
+| `short-lev-bot` | the Telegram command poller. `After=network-online.target` only -- it never talks to Gateway; exactly one process (the monitor) holds an IBKR connection. |
+
+### The group chat id can change out from under you
+
+`TELEGRAM_CHAT_ID` points at a **basic** Telegram group (ten digits, no `-100`
+prefix). Basic groups convert to supergroups on various ordinary events, and
+**conversion changes the chat id**. When that happens every send starts
+failing; the sink is deliberately non-fatal, so without the guard this would
+be a silent outage. `notify.send_text` detects the `migrate_to_chat_id` error
+payload and logs at ERROR with both the dead id and the replacement. The fix
+is a human one, on purpose: put the new id in `TELEGRAM_CHAT_ID` in `.env` and
+restart the monitor and the bot. Nothing auto-rewrites `.env`.
 
 `After=` is ordering, not readiness -- systemd starts the monitor once Gateway's
 *process* exists, well before it is logged in. The monitor's connect backoff is
