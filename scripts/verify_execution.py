@@ -27,8 +27,25 @@ Checks:
   m. No placeOrder anywhere in src/, execution.py and broker.py included.
   n. /status renders the execution line from runtime.json, and says
      "not reported" when a pre-rails monitor wrote the file.
-  o. orphan_scan flags and alerts on found orders, and treats a failed query
-     as UNKNOWN -- logged, not flagged.
+  o. reconcile_on_connect flags and alerts on a confirmed orphan order, and
+     treats a failed open-order or fills read as UNKNOWN -- returns False,
+     logs, writes NO flag (spec 009 section 9: fail closed for the cycle,
+     no sticky state).
+  p. ValidationError and Inactive are terminal refusals, and nothing in src/
+     waits on trade.isDone() or trade.filledEvent (gate 2).
+  q. classify() names all six section-4 cases from fixtures, matches by
+     orderRef prefix with a permId fallback, and dedups recorded execs
+     (gate 3).
+  r. A filled-not-in-ledger execution blocks submission (flag file -> gate
+     blocked), alerts CRITICAL, is recorded as foreign_fill, and does NOT
+     re-flag on the next reconcile (gate 4).
+  s. The unhedged timer fires exactly at the bound, once, and only when a
+     multi-leg ticket is one-legged (gate 7).
+  t. Partial-fill accounting derives from folded fill rows -- duplicate
+     exec_ids count once, totals reconcile to the cent (gate 8).
+  u. predispatch_orders refuses the cycle on a failed query with NO flag,
+     waits on our own working order, flags a foreign one, and passes a
+     clean book (gate 9).
 """
 
 import datetime
@@ -45,6 +62,7 @@ import bot
 import config
 import decision
 import execution
+import execution_state
 import monitor
 import orders
 
@@ -367,22 +385,33 @@ def check_o():
     found = [{"symbol": "TSLL", "action": "BUY", "quantity": 10,
               "order_type": "LMT", "limit_price": 9.5, "status": "Submitted",
               "perm_id": 1, "client_id": 0, "order_ref": None}]
-    real = monitor.broker.open_orders
+    real_open, real_fills = monitor.broker.open_orders, monitor.broker.fills
     capture = _Capture()
     monitor.log.addHandler(capture)
     sent = []
     try:
         with tempfile.TemporaryDirectory() as tmp, _rails_env(tmp) as env:
+            state = execution_state.fresh()
             monitor.broker.open_orders = lambda ib: found
-            flagged = monitor.orphan_scan(None, lambda *a: sent.append(a))
+            monitor.broker.fills = lambda ib: []
+            flagged = monitor.reconcile_on_connect(
+                None, lambda *a: sent.append(a), state)
             flag_written = os.path.exists(env.values["ORPHAN_FLAG_PATH"])
 
-            monitor.broker.open_orders = lambda ib: None
             os.remove(env.values["ORPHAN_FLAG_PATH"])
-            unknown = monitor.orphan_scan(None, lambda *a: sent.append(a))
+            monitor.broker.open_orders = lambda ib: None
+            unknown = monitor.reconcile_on_connect(
+                None, lambda *a: sent.append(a), state)
             flag_after_unknown = os.path.exists(env.values["ORPHAN_FLAG_PATH"])
+
+            monitor.broker.open_orders = lambda ib: []
+            monitor.broker.fills = lambda ib: None
+            fills_unknown = monitor.reconcile_on_connect(
+                None, lambda *a: sent.append(a), state)
+            flag_after_fills = os.path.exists(env.values["ORPHAN_FLAG_PATH"])
     finally:
-        monitor.broker.open_orders = real
+        monitor.broker.open_orders = real_open
+        monitor.broker.fills = real_fills
         monitor.log.removeHandler(capture)
     criticals = [r for r in capture.records if r.levelno == logging.CRITICAL]
     errors = [r for r in capture.records if r.levelno == logging.ERROR]
@@ -392,13 +421,270 @@ def check_o():
         and sent[0][1] == "orphan orders"
         and len(criticals) >= 1
         and unknown is False and not flag_after_unknown
-        and len(errors) == 1 and len(sent) == 1
+        and fills_unknown is False and not flag_after_fills
+        and len(errors) == 2 and len(sent) == 1
     )
-    return check("o. orphan_scan flags and alerts on found orders; a failed "
-                 "query is UNKNOWN, logged, not flagged",
-                 ok, f"flagged={flagged}, flag file={flag_written}, alerts="
-                     f"{len(sent)}, CRITICAL={len(criticals)}, failed query "
-                     f"-> flagged={flag_after_unknown}, ERROR={len(errors)}")
+    return check("o. reconcile flags a confirmed orphan; a failed open-order "
+                 "or fills read is UNKNOWN -- False, logged, not flagged",
+                 ok, f"orphan run={flagged} flag={flag_written} alerts="
+                     f"{len(sent)}; failed open read -> {unknown}, flag="
+                     f"{flag_after_unknown}; failed fills read -> "
+                     f"{fills_unknown}, flag={flag_after_fills}, "
+                     f"ERROR lines={len(errors)}")
+
+
+def check_p():
+    """Gate 2. The classifier says terminal for the states an executor would
+    otherwise wait on forever, and no src module waits on trade.isDone() or
+    trade.filledEvent -- the dotted forms, so prose ABOUT the trap does not
+    trip the check that enforces it."""
+    verdicts = [execution.is_terminal_refusal(s)
+                for s in ("ValidationError", "Inactive", "Submitted",
+                          "PendingSubmit", "PreSubmitted", "Filled")]
+    src_dir = os.path.join(os.path.dirname(__file__), "..", "src")
+    waiters = []
+    for name in sorted(os.listdir(src_dir)):
+        if not name.endswith(".py"):
+            continue
+        with open(os.path.join(src_dir, name), encoding="utf-8") as f:
+            text = f.read()
+        if ".isDone(" in text or ".filledEvent" in text:
+            waiters.append(name)
+    ok = verdicts == [True, True, False, False, False, False] and not waiters
+    return check("p. ValidationError/Inactive are terminal refusals; nothing "
+                 "waits on isDone or filledEvent",
+                 ok, f"verdicts={verdicts}, waiting modules: "
+                     f"{waiters or 'none'}")
+
+
+def _reconcile_fixture():
+    """Six-case fixture: one ledger, one order book, one fills replay."""
+    ledger = [
+        {"status": "submitted", "order_ref": "shortlev:p1:TSLL",
+         "proposal_id": "p1", "ticker": "TSLL", "side": "BUY TO COVER",
+         "shares": 50, "limit": 9.40, "trigger": "foil decay band"},
+        {"status": "submitted", "order_ref": "shortlev:p1:TSLA",
+         "proposal_id": "p1", "ticker": "TSLA", "side": "BUY",
+         "shares": 40, "limit": 340.00, "trigger": "foil decay band"},
+        {"status": "submitted", "order_ref": "shortlev:p2:TSLL",
+         "proposal_id": "p2", "ticker": "TSLL", "side": "SELL (short more)",
+         "shares": 30, "limit": 9.80, "trigger": "foil decay band"},
+        {"status": "submitted", "order_ref": "shortlev:p3:TSLL",
+         "proposal_id": "p3", "ticker": "TSLL", "side": "BUY TO COVER",
+         "shares": 100, "limit": 9.40, "trigger": "foil decay band"},
+        {"status": "submitted", "order_ref": "shortlev:p4:TSLA",
+         "proposal_id": "p4", "ticker": "TSLA", "side": "BUY",
+         "shares": 10, "limit": 339.00, "trigger": "long-short band",
+         "perm_id": 777},
+        {"status": "fill", "order_ref": "shortlev:p3:TSLL",
+         "exec_id": "e-known", "shares": 10, "price": 9.40},
+    ]
+    open_rows = [
+        {"symbol": "TSLL", "order_ref": "shortlev:p1:TSLL", "perm_id": 11,
+         "status": "Submitted"},
+        {"symbol": "TSLL", "order_ref": "shortlev:p3:TSLL", "perm_id": 33,
+         "status": "Submitted"},
+        # orderRef missing (question 2's pessimistic outcome) -- must still
+        # match leg p4 through the permId fallback.
+        {"symbol": "TSLA", "order_ref": None, "perm_id": 777,
+         "status": "Submitted"},
+        {"symbol": "MSFT", "order_ref": None, "perm_id": 999,
+         "status": "Submitted"},
+    ]
+    fill_rows = [
+        {"exec_id": "e1", "order_ref": "shortlev:p1:TSLA", "shares": 25,
+         "price": 340.00},
+        {"exec_id": "e2", "order_ref": "shortlev:p1:TSLA", "shares": 15,
+         "price": 340.10},
+        {"exec_id": "e3", "order_ref": "shortlev:p3:TSLL", "shares": 20,
+         "price": 9.40},
+        # Replay duplicate of the exec the ledger already carries.
+        {"exec_id": "e-known", "order_ref": "shortlev:p3:TSLL", "shares": 10,
+         "price": 9.40},
+        {"exec_id": "e4", "order_ref": None, "perm_id": 555, "shares": 5,
+         "price": 100.00, "symbol": "MSFT", "side": "BOT"},
+    ]
+    return ledger, open_rows, fill_rows
+
+
+def check_q():
+    ledger, open_rows, fill_rows = _reconcile_fixture()
+    findings = execution.classify(ledger, open_rows, fill_rows)
+    by_ref = {f.get("order_ref"): f["case"] for f in findings
+              if f.get("order_ref")}
+    partial = next((f for f in findings if f["case"] == "partial"), {})
+    orphan_orders = [f for f in findings if f["case"] == "orphan_working"]
+    orphan_fills = [f for f in findings if f["case"] == "orphan_filled"]
+    ok = (
+        by_ref.get("shortlev:p1:TSLL") == "working"
+        and by_ref.get("shortlev:p1:TSLA") == "filled_while_away"
+        and by_ref.get("shortlev:p2:TSLL") == "expired"
+        and by_ref.get("shortlev:p3:TSLL") == "partial"
+        and by_ref.get("shortlev:p4:TSLA") == "working"  # permId fallback
+        and partial.get("filled_shares") == 30  # 10 known + 20 new, dup dropped
+        and partial.get("working") is True
+        and len(orphan_orders) == 1
+        and orphan_orders[0]["order"]["symbol"] == "MSFT"
+        and len(orphan_fills) == 1
+        and orphan_fills[0]["fill"]["exec_id"] == "e4"
+        and len(findings) == 7
+    )
+    return check("q. classify names all six cases, permId fallback matches, "
+                 "recorded execs dedup",
+                 ok, f"cases={by_ref}, partial filled="
+                     f"{partial.get('filled_shares')}, orphans="
+                     f"{len(orphan_orders)} order(s) + "
+                     f"{len(orphan_fills)} fill(s), findings={len(findings)}")
+
+
+def check_r():
+    foreign_fill = {"exec_id": "zz1", "symbol": "TSLL", "side": "SLD",
+                    "shares": 5, "price": 9.50, "perm_id": 42,
+                    "time": "2026-08-13 15:59:59-04:00"}
+    real_open, real_fills = monitor.broker.open_orders, monitor.broker.fills
+    sent = []
+    try:
+        with tempfile.TemporaryDirectory() as tmp, _rails_env(tmp) as env:
+            monitor.broker.open_orders = lambda ib: []
+            monitor.broker.fills = lambda ib: [foreign_fill]
+            state = execution_state.fresh()
+            first = monitor.reconcile_on_connect(
+                None, lambda *a: sent.append(a), state)
+            flag_written = os.path.exists(env.values["ORPHAN_FLAG_PATH"])
+            gate = execution.submission_gate()
+            rows = read_orders(tmp)
+
+            os.remove(env.values["ORPHAN_FLAG_PATH"])
+            second = monitor.reconcile_on_connect(
+                None, lambda *a: sent.append(a), state)
+            reflagged = os.path.exists(env.values["ORPHAN_FLAG_PATH"])
+    finally:
+        monitor.broker.open_orders = real_open
+        monitor.broker.fills = real_fills
+    recorded = [r for r in rows if r.get("status") == "foreign_fill"
+                and r.get("exec_id") == "zz1"]
+    ok = (
+        first is True and flag_written
+        and gate.allow is False and gate.mode == "blocked"
+        and "orphan" in gate.reason
+        and len(recorded) == 1
+        and len(sent) == 1 and sent[0][0] == "CRITICAL"
+        and second is True and not reflagged
+    )
+    return check("r. a filled-not-in-ledger exec blocks the gate, alerts "
+                 "CRITICAL, records foreign_fill, does not re-flag",
+                 ok, f"flag={flag_written}, gate={gate.mode} "
+                     f"({gate.reason!r}), foreign_fill rows={len(recorded)}, "
+                     f"alerts={len(sent)}, re-flagged after clear={reflagged}")
+
+
+def check_s():
+    base = datetime.datetime(2026, 8, 13, 14, 0, tzinfo=ET)
+    ticket = {
+        "trigger": "foil decay band",
+        "legs": {"shortlev:p1:TSLL": {"ticker": "TSLL", "shares": 50,
+                                      "complete": True},
+                 "shortlev:p1:TSLA": {"ticker": "TSLA", "shares": 40,
+                                      "complete": False}},
+        "first_complete_ts": base.isoformat(timespec="seconds"),
+        "unhedged_alerted": False,
+    }
+    early = execution.check_unhedged(
+        ticket, base + datetime.timedelta(minutes=9, seconds=59), 10)
+    due = execution.check_unhedged(
+        ticket, base + datetime.timedelta(minutes=10), 10)
+    fired = dict(ticket, unhedged_alerted=True)
+    silent_after = execution.check_unhedged(
+        fired, base + datetime.timedelta(hours=2), 10)
+    both = {**ticket, "legs": {
+        ref: dict(leg, complete=True) for ref, leg in ticket["legs"].items()}}
+    hedged = execution.check_unhedged(
+        both, base + datetime.timedelta(hours=2), 10)
+    none_yet = {**ticket, "legs": {
+        ref: dict(leg, complete=False) for ref, leg in ticket["legs"].items()}}
+    unstarted = execution.check_unhedged(
+        none_yet, base + datetime.timedelta(hours=2), 10)
+    single = {**ticket, "legs": {"shortlev:p1:TSLL":
+                                 {"ticker": "TSLL", "shares": 50,
+                                  "complete": True}}}
+    one_leg = execution.check_unhedged(
+        single, base + datetime.timedelta(hours=2), 10)
+    ok = (early is False and due is True and silent_after is False
+          and hedged is False and unstarted is False and one_leg is False)
+    return check("s. unhedged timer: fires at the bound, once, only for a "
+                 "one-legged multi-leg ticket",
+                 ok, f"9m59s={early}, 10m={due}, after alert={silent_after}, "
+                     f"both done={hedged}, none done={unstarted}, "
+                     f"single leg={one_leg}")
+
+
+def check_t():
+    rows = [
+        {"status": "submitted", "order_ref": "shortlev:p9:TSLA",
+         "proposal_id": "p9", "ticker": "TSLA", "side": "BUY", "shares": 40,
+         "limit": 340.50, "trigger": "long-short band"},
+        {"status": "fill", "order_ref": "shortlev:p9:TSLA", "exec_id": "x1",
+         "shares": 25, "price": 340.10},
+        {"status": "fill", "order_ref": "shortlev:p9:TSLA", "exec_id": "x2",
+         "shares": 15, "price": 340.25},
+        # The same execution replayed -- documented duplication, counted once.
+        {"status": "fill", "order_ref": "shortlev:p9:TSLA", "exec_id": "x1",
+         "shares": 25, "price": 340.10},
+    ]
+    leg = execution.fold_ledger(rows)["shortlev:p9:TSLA"]
+    expected = round(25 * 340.10 + 15 * 340.25, 2)
+    ok = (leg["filled_shares"] == 40
+          and leg["filled_notional"] == expected
+          and execution.fill_totals(leg["fills"].values()) == (40, expected))
+    return check("t. accounting folds fill rows: duplicate execs count once, "
+                 "notional reconciles to the cent",
+                 ok, f"filled={leg['filled_shares']} sh, notional="
+                     f"{leg['filled_notional']} (expected {expected})")
+
+
+def check_u():
+    ours = [{"symbol": "TSLL", "order_ref": "shortlev:p1:TSLL",
+             "perm_id": 11, "status": "Submitted"}]
+    foreign = [{"symbol": "MSFT", "action": "BUY", "quantity": 10,
+                "order_type": "LMT", "status": "Submitted", "perm_id": 99,
+                "client_id": 0, "order_ref": None}]
+    real = monitor.broker.open_orders
+    sent = []
+    results = {}
+    try:
+        with tempfile.TemporaryDirectory() as tmp, _rails_env(tmp) as env:
+            flag = env.values["ORPHAN_FLAG_PATH"]
+            monitor.broker.open_orders = lambda ib: None
+            results["failed"] = (monitor.predispatch_orders(
+                None, lambda *a: sent.append(a)), os.path.exists(flag))
+            monitor.broker.open_orders = lambda ib: ours
+            results["ours"] = (monitor.predispatch_orders(
+                None, lambda *a: sent.append(a)), os.path.exists(flag))
+            monitor.broker.open_orders = lambda ib: foreign
+            results["foreign"] = (monitor.predispatch_orders(
+                None, lambda *a: sent.append(a)), os.path.exists(flag))
+            os.remove(flag)
+            monitor.broker.open_orders = lambda ib: []
+            results["clean"] = (monitor.predispatch_orders(
+                None, lambda *a: sent.append(a)), os.path.exists(flag))
+    finally:
+        monitor.broker.open_orders = real
+    (f_ok, f_reason), f_flag = results["failed"]
+    (o_ok, o_reason), o_flag = results["ours"]
+    (x_ok, _), x_flag = results["foreign"]
+    (c_ok, _), c_flag = results["clean"]
+    ok = (
+        f_ok is False and "no flag" in f_reason and not f_flag
+        and o_ok is False and "not re-issuing" in o_reason and not o_flag
+        and x_ok is False and x_flag and len(sent) == 1
+        and sent[0][0] == "CRITICAL"
+        and c_ok is True and not c_flag
+    )
+    return check("u. predispatch: failed read refuses with no flag, ours "
+                 "waits, foreign flags, clean passes",
+                 ok, f"failed=({f_ok}, flag={f_flag}), ours=({o_ok}, flag="
+                     f"{o_flag}), foreign=({x_ok}, flag={x_flag}, alerts="
+                     f"{len(sent)}), clean=({c_ok}, flag={c_flag})")
 
 
 def main():
@@ -406,6 +692,8 @@ def main():
         check_a(), check_b(), check_c(), check_d(), check_e(),
         check_f(), check_g(), check_h(), check_i(), check_j(),
         check_k(), check_l(), check_m(), check_n(), check_o(),
+        check_p(), check_q(), check_r(), check_s(), check_t(),
+        check_u(),
     ]
     print("=" * 60)
     if all(results):

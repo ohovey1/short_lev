@@ -1,4 +1,5 @@
-"""The monitor loop. Reads one pair, decides, prints. Never trades.
+"""The monitor loop. Reads one pair, decides, alerts; tripped decisions go to
+the execution layer's railed dispatch (spec 009).
 
 Long-running process: connect once, loop until killed, reconnect on drop. NOT a
 cron job that connects and exits each cycle -- reconnecting every 15 minutes
@@ -17,8 +18,12 @@ Two things this deliberately does NOT do:
     reference for a trade that never happened corrupts every subsequent band
     reading. The de-risk target is reported and thrown away.
 
-  - Submit orders. Out of scope in spec 004, not behind a flag. Gateway should
-    also be running in Read-Only API mode.
+  - Touch the wire itself. Spec 009 gave trips an executor, but every
+    submission decision is execution.dispatch's -- four default-off rails, one
+    line to audit -- and every wire-touching line lives in execution.py, never
+    here. Until armed (DRY_RUN=0, EXECUTION_ENABLED=1, no HALT, no orphan
+    flag) a trip produces a logged dry-run ticket and an alert, nothing else;
+    terminal triggers never dispatch at all.
 
 ib.sleep, never time.sleep
 --------------------------
@@ -50,6 +55,7 @@ import config
 import decision
 import events
 import execution
+import execution_state
 import monitor_state
 import notify
 import orders
@@ -553,48 +559,216 @@ def check_record(state, d, unactionable, params, details, ts):
     }
 
 
-def orphan_scan(ib, send):
-    """Working orders found at connect time. Spec 009 rail c.
+def _orphan_line(o):
+    """One human line per unaccountable order or fill. The two shapes share
+    the flag file, so the formatter reads both."""
+    if "exec_id" in o:
+        return (f"FILL {o.get('symbol')} {o.get('side')} "
+                f"{o.get('shares') or 0:g} @ {o.get('price')} "
+                f"at {o.get('time')} execId={o.get('exec_id')} "
+                f"ref={o.get('order_ref') or '-'}")
+    return (f"{o.get('symbol')} {o.get('action')} {o.get('quantity') or 0:g} "
+            f"{o.get('order_type')} status={o.get('status')} "
+            f"clientId={o.get('client_id')} ref={o.get('order_ref') or '-'}")
 
-    Restarts are routine under Restart=always, and orphaned working orders are
-    the classic executor bug -- so any order the API can see gets one CRITICAL
-    log per order, one CRITICAL alert, and the flag file that blocks
-    submission until a human reconciles and deletes it. Nothing is cancelled:
-    this repo submits nothing and cancels nothing.
 
-    A failed query is treated as UNKNOWN, not as clean -- it is logged at
-    ERROR but not flagged, because wedging submission on every transient read
-    error would train people to clear the flag reflexively, which is worse
-    than the flag not existing. Flagged only on confirmed orphans.
+def orphan_alert(found, send, filled=False):
+    """The orphan rail: flag file, CRITICAL log, CRITICAL alert.
+
+    Spec 009 section 4 rows five and six share it. A working order the ledger
+    cannot account for is the classic executor bug; an EXECUTION the ledger
+    cannot account for is worse -- something traded with no record, which is
+    precisely what an event-driven design would never see. Either way
+    submission stays blocked until a human reconciles and deletes the flag.
+    Nothing is cancelled here.
     """
-    found = broker.open_orders(ib)
-    if found is None:
-        log.error(
-            "orphan check: open-order query failed; state UNKNOWN. Not "
-            "flagging on a failed read, but do not trust the account to be "
-            "order-free either.")
-        return False
-    if not found:
-        log.info("orphan check: no working orders at connect")
-        return False
-
     flag = execution.flag_orphans(found)
-    log.critical(
-        "ORPHAN CHECK: %d working order(s) at connect that this process "
-        "cannot account for. Submission blocked until a human reconciles "
-        "them and deletes %s.", len(found), flag)
+    what = ("execution(s) with no ledger record -- something traded that "
+            "this process did not record" if filled else
+            "working order(s) the ledger cannot account for")
+    log.critical("ORPHAN CHECK: %d %s. Submission blocked until a human "
+                 "reconciles and deletes %s.", len(found), what, flag)
     lines = []
     for o in found:
-        line = (f"{o['symbol']} {o['action']} {o['quantity']:g} "
-                f"{o['order_type']} status={o['status']} "
-                f"clientId={o['client_id']} ref={o['order_ref'] or '-'}")
+        line = _orphan_line(o)
         log.critical("  %s", line)
         lines.append(line)
     send("CRITICAL", "orphan orders",
-         f"{PAIR_KEY} -- working orders found at connect",
-         "Working orders exist on the account that this monitor did not "
-         "place (it places none). Submission is blocked until a human "
-         "reconciles them and deletes the flag file.\n\n" + "\n".join(lines))
+         f"{PAIR_KEY} -- unaccounted {'fills' if filled else 'orders'} found",
+         f"Found {what}. Submission is blocked until a human reconciles "
+         "and deletes the flag file.\n\n" + "\n".join(lines))
+
+
+def _record_fill(order_ref, f):
+    """One ledger row per execution, keyed by exec_id for dedup."""
+    events.log_order({"status": "fill", "order_ref": order_ref,
+                      "exec_id": f.get("exec_id"), "shares": f.get("shares"),
+                      "price": f.get("price"), "perm_id": f.get("perm_id"),
+                      "fill_time": f.get("time")})
+
+
+def _record_foreign_fill(f):
+    """A foreign execution gets its own ledger row so the SAME event is not
+    re-flagged on every reconnect -- that would train reflexive
+    flag-clearing, the exact habit section 9 exists to avoid."""
+    events.log_order({"status": "foreign_fill", "exec_id": f.get("exec_id"),
+                      "symbol": f.get("symbol"), "side": f.get("side"),
+                      "shares": f.get("shares"), "price": f.get("price"),
+                      "perm_id": f.get("perm_id"), "fill_time": f.get("time")})
+
+
+def _leg_complete(exec_state, leg, fill_time):
+    """Mark a leg's ticket entry complete; anchor the unhedged timer on the
+    FIRST completed leg of a multi-leg ticket; drop the ticket once every leg
+    is done -- both legs filled means hedged again, nothing left to time."""
+    pid = leg.get("proposal_id")
+    ticket = (exec_state.get("tickets") or {}).get(pid)
+    if not ticket:
+        return
+    entry = (ticket.get("legs") or {}).get(leg["order_ref"])
+    if entry is None:
+        return
+    entry["complete"] = True
+    if all(e.get("complete") for e in ticket["legs"].values()):
+        exec_state["tickets"].pop(pid, None)
+    elif not ticket.get("first_complete_ts"):
+        # The fill's own time when parseable -- a restart mid-window must not
+        # restart the clock -- else now.
+        ticket["first_complete_ts"] = (fill_time if _parse_ts(fill_time)
+                                       else events.now_iso())
+
+
+def _ticket_dead(exec_state, leg):
+    """Drop a ticket whose leg stopped trading unfilled (expiry, cancel,
+    refusal): its unhedged story is over and the band re-trip takes over."""
+    (exec_state.get("tickets") or {}).pop(leg.get("proposal_id"), None)
+
+
+def predispatch_orders(ib, send):
+    """The fresh open-order read immediately before a dispatch: (ok, reason).
+
+    The connect-time picture ages, and re-issuing into a book that already
+    holds our resting DAY order is the double-submission bug. Three ways to
+    say no, each with a different consequence:
+
+      - the read failed: refuse THIS cycle, write no flag (section 9 -- a
+        missed cycle costs one poll interval, submitting into an unknown
+        book is unbounded);
+      - our own order is still working: not a re-issue situation, wait;
+      - a foreign order is working: the orphan rail fires (flag + CRITICAL)
+        and the gate blocks until a human clears it.
+    """
+    open_rows = broker.open_orders(ib)
+    if open_rows is None:
+        return False, ("open-order query failed; dispatch refused this "
+                       "cycle, no flag written")
+    ours = [o for o in open_rows if execution.is_ours(o.get("order_ref"))]
+    if ours:
+        return False, (f"{len(ours)} working order(s) of ours -- not "
+                       "re-issuing while a DAY order rests")
+    foreign = [o for o in open_rows
+               if not execution.is_ours(o.get("order_ref"))]
+    if foreign:
+        orphan_alert(foreign, send)
+        return False, "foreign working orders found -- flagged and blocked"
+    return True, "order book clean"
+
+
+def reconcile_on_connect(ib, send, exec_state):
+    """Spec 009 section 4: the spine, not a recovery path.
+
+    Fills that happen while disconnected are replayed as data with no events,
+    and our reconnect discards every subscription anyway (execution-notes
+    section 3) -- so on every connect the picture is rebuilt from
+    reqAllOpenOrders + the fills replay + the orders.jsonl ledger, and every
+    non-terminal ledger row is classified into the six-case table.
+
+    Returns True when both reads answered and the findings were applied.
+    False means the order book or fill state is UNKNOWN: dispatch stays
+    refused until a later attempt succeeds, and NO flag is written -- fail
+    closed on the read, no sticky state. Section 9 splits exactly this from
+    the confirmed-orphan case: a missed cycle costs one poll interval;
+    submitting into an unknown order book is unbounded.
+    """
+    open_rows = broker.open_orders(ib)
+    if open_rows is None:
+        log.error("reconcile: open-order query failed; order book UNKNOWN. "
+                  "Dispatch refused until a read succeeds; not flagging on "
+                  "a failed read.")
+        return False
+    fill_rows = broker.fills(ib)
+    if fill_rows is None:
+        log.error("reconcile: fills read failed; fill state UNKNOWN. "
+                  "Dispatch refused until a read succeeds; not flagging on "
+                  "a failed read.")
+        return False
+
+    findings = execution.classify(execution.read_ledger(), open_rows,
+                                  fill_rows)
+    orphan_orders, orphan_fills = [], []
+    for finding in findings:
+        case = finding["case"]
+        leg = finding.get("leg")
+        ref = finding.get("order_ref")
+        if case == "working":
+            log.info("reconcile: %s still working (%s)", ref,
+                     finding["order"].get("status"))
+        elif case == "filled_while_away":
+            for f in finding["new_fills"]:
+                _record_fill(ref, f)
+            shares, notional = execution.fill_totals(
+                list(leg["fills"].values()) + finding["new_fills"])
+            events.log_order({"status": "filled", "order_ref": ref,
+                              "filled_shares": shares,
+                              "filled_notional": notional})
+            log.info("reconcile: %s filled while away: %g sh = %.2f",
+                     ref, shares, notional)
+            send("INFO", "reconcile", f"{PAIR_KEY} -- order filled while away",
+                 f"{ref}: {shares:g} shares for {notional:,.2f} filled while "
+                 "the monitor was not watching. Recorded from execution "
+                 "replay.")
+            fill_time = (finding["new_fills"] or [{}])[-1].get("time")
+            _leg_complete(exec_state, leg, fill_time)
+            if leg.get("trigger"):
+                execution.clear_issues(exec_state, leg["trigger"])
+        elif case == "partial":
+            for f in finding["new_fills"]:
+                _record_fill(ref, f)
+            if finding["working"]:
+                send("WARNING", "reconcile", f"{PAIR_KEY} -- partial fill",
+                     f"{ref}: {finding['filled_shares']:g} of "
+                     f"{finding['total_shares']:g} shares filled; remainder "
+                     "still working.")
+            else:
+                events.log_order({
+                    "status": "cancelled", "order_ref": ref,
+                    "note": "remainder gone unfilled (cancelled or expired "
+                            "at the close); fills already received stay ours"})
+                send("WARNING", "reconcile",
+                     f"{PAIR_KEY} -- partial fill, remainder gone",
+                     f"{ref}: {finding['filled_shares']:g} of "
+                     f"{finding['total_shares']:g} shares filled; the "
+                     "remainder is no longer working. Recorded; the band "
+                     "re-check decides what happens next.")
+                _ticket_dead(exec_state, leg)
+        elif case == "expired":
+            events.log_order({"status": "expired", "order_ref": ref})
+            log.info("reconcile: %s expired unfilled (DAY at the close, or "
+                     "a submit that never reached the wire)", ref)
+            _ticket_dead(exec_state, leg)
+        elif case == "orphan_working":
+            orphan_orders.append(finding["order"])
+        elif case == "orphan_filled":
+            _record_foreign_fill(finding["fill"])
+            orphan_fills.append(finding["fill"])
+
+    if orphan_orders:
+        orphan_alert(orphan_orders, send)
+    if orphan_fills:
+        orphan_alert(orphan_fills, send, filled=True)
+    if not (orphan_orders or orphan_fills):
+        log.info("reconcile: clean -- %d open order(s), %d fill(s), all "
+                 "accounted for", len(open_rows), len(fill_rows))
     return True
 
 
@@ -648,6 +822,8 @@ def run():
     params = band_params()
     pair = config.PAIRS[PAIR_KEY]
     path = monitor_state.state_path()
+    exec_state_path = execution_state.state_path()
+    exec_state = execution_state.load(exec_state_path)
 
     target = derive_target(base_capital, params, pair)
     log.info(
@@ -697,9 +873,11 @@ def run():
     gate = execution.submission_gate()
     log.info(
         "execution: mode=%s -- %s (halt=%s orphan_flag=%s "
-        "max_order_multiple=%g)",
+        "max_order_multiple=%g state=%s unhedged=%gmin reissue_warn=%d)",
         gate.mode, gate.reason, execution.halt_path(),
         execution.orphan_flag_path(), execution.max_order_multiple(),
+        exec_state_path, execution.unhedged_minutes(),
+        execution.reissue_warn_count(),
     )
 
     def send(severity, kind, title, body, reply_markup=None):
@@ -778,6 +956,146 @@ def run():
                                       params, fresh_details, fresh_ts))
         return (fresh_state, fresh_d, fresh_details, fresh_prices, fresh_ts,
                 fresh_unactionable)
+
+    def dispatch_on_trip(trip_state, trip_d, trip_details, trip_prices,
+                         trip_ts):
+        """The executor path, coupled 1:1 to trip alerts: the orders.jsonl
+        ticket and the Telegram alert describe the same moment, which is
+        exactly what gate 13 audits. Terminal triggers never dispatch --
+        automating the largest action in the system is a separate argument,
+        deliberately not inherited from spec 009."""
+        if trip_d.trigger is None:
+            return
+        if trip_d.terminal:
+            log.info("executor: %s is terminal -- alert-only by design",
+                     trip_d.trigger)
+            return
+        if not reconciled:
+            log.error("executor: dispatch refused this cycle -- reconcile "
+                      "has not succeeded since connect, so the order book "
+                      "is not known to be clean")
+            return
+        ok, reason = predispatch_orders(ib, send)
+        if not ok:
+            log.log(logging.ERROR if "failed" in reason else logging.INFO,
+                    "executor: %s", reason)
+            return
+        held = {t: leg["shares"] for t, leg in trip_details.items()}
+        proposal = orders.build_proposal(trip_state, trip_d, params,
+                                         trip_prices, held, pair,
+                                         marketable_offset)
+        if proposal is None or not any(leg["tradeable"]
+                                       for leg in proposal["legs"]):
+            log.info("executor: nothing tradeable on this proposal; "
+                     "not dispatching")
+            return
+        pid = proposal_id(trip_ts)
+        status = execution.dispatch(
+            proposal, target, send=send,
+            extra={"proposal_id": pid, "decision_id": decision_id(trip_ts),
+                   "source": "executor"},
+            ib=ib)
+        log.info("executor: dispatch -> %s (proposal %s)", status, pid)
+        if status not in ("dry_run", "submitted"):
+            return
+        # Issues count in dry run too -- a nudge that is never rehearsed is
+        # a nudge that fires wrong the first time it matters.
+        issues = execution.note_issue(exec_state, trip_d.trigger)
+        if issues - 1 >= execution.reissue_warn_count():
+            send("WARNING", "reissue",
+                 f"{PAIR_KEY} -- {issues - 1} re-issues without a fill",
+                 f"The {trip_d.trigger} proposal has been issued {issues} "
+                 "times without a fill. The limit style may be wrong for "
+                 "this pair (spec 009 section 7). A nudge, not an action -- "
+                 "nothing is escalated automatically.")
+        if status == "submitted":
+            exec_state["tickets"][pid] = {
+                "trigger": trip_d.trigger, "ts": trip_ts,
+                "legs": {execution.order_ref(pid, leg["ticker"]): {
+                             "ticker": leg["ticker"],
+                             "shares": leg["shares"],
+                             "complete": False}
+                         for leg in proposal["legs"] if leg["tradeable"]},
+                "first_complete_ts": None,
+                "unhedged_alerted": False,
+            }
+        execution_state.save(exec_state_path, exec_state)
+
+    def track_fills():
+        """Intra-session fill tracking, once per sleep slice. ib.fills() is
+        a cached list -- no wire call -- so polling it is free, and the
+        ledger is only re-read when the count moves. Events would be lower
+        latency, but our reconnect discards subscriptions and replays fire
+        no events; this poll is the latency layer that survives both
+        (execution-notes section 3). Accounting stays fills-derived."""
+        nonlocal last_fill_count
+        fill_rows = broker.fills(ib)
+        if fill_rows is None or len(fill_rows) == last_fill_count:
+            return
+        last_fill_count = len(fill_rows)
+        ledger_rows = execution.read_ledger()
+        legs = execution.fold_ledger(ledger_rows)
+        recorded = {r["exec_id"] for r in ledger_rows if r.get("exec_id")}
+        new_by_ref, foreign = execution.match_fills(legs, recorded, fill_rows)
+        dirty = False
+        for ref, fs in new_by_ref.items():
+            leg = legs[ref]
+            for f in fs:
+                _record_fill(ref, f)
+            filled = leg["filled_shares"] + execution.fill_totals(fs)[0]
+            total = leg["shares"] or 0
+            log.info("fill: %s now %g of %g shares", ref, filled, total)
+            if total and filled >= total:
+                shares, notional = execution.fill_totals(
+                    list(leg["fills"].values()) + fs)
+                events.log_order({"status": "filled", "order_ref": ref,
+                                  "filled_shares": shares,
+                                  "filled_notional": notional})
+                _leg_complete(exec_state, leg, fs[-1].get("time"))
+                if leg.get("trigger"):
+                    execution.clear_issues(exec_state, leg["trigger"])
+                dirty = True
+        for f in foreign:
+            _record_foreign_fill(f)
+        if foreign:
+            orphan_alert(foreign, send, filled=True)
+        if dirty:
+            execution_state.save(exec_state_path, exec_state)
+
+    def check_unhedged_tickets():
+        """Spec 009 section 5: detection bounds the fill gap, sequencing
+        would not. Checked every sleep slice (~10s) -- a 10-minute bound
+        checked once per 15-minute poll is not a 10-minute bound."""
+        now = datetime.datetime.now(ET)
+        minutes = execution.unhedged_minutes()
+        fired = False
+        for pid, ticket in list((exec_state.get("tickets") or {}).items()):
+            if not execution.check_unhedged(ticket, now, minutes):
+                continue
+            ticket["unhedged_alerted"] = True
+            fired = True
+            legs_desc = "\n".join(
+                f"{entry['ticker']}: "
+                f"{'complete' if entry.get('complete') else 'NOT filled'} "
+                f"({entry.get('shares')} sh)"
+                for entry in ticket["legs"].values())
+            net_line = ""
+            if peak_equity is not None:
+                state_now = broker.read_position(
+                    ib, PAIR_KEY, derive_target(base_capital, params, pair),
+                    peak_equity)
+                if state_now is not None:
+                    d_now = decision.evaluate(state_now, params)
+                    net_line = f"\nnet delta now: {d_now.net_delta:+,.2f}"
+            send("CRITICAL", "unhedged",
+                 f"{PAIR_KEY} -- one leg unhedged for {minutes:g} min",
+                 f"Ticket {pid} ({ticket.get('trigger')}): one leg complete, "
+                 f"the other not, for {minutes:g} minutes.\n" + legs_desc
+                 + net_line +
+                 "\nNothing is escalated automatically; an unfilled DAY leg "
+                 "expires at the close (spec 009 sections 5 and 7).")
+        if fired:
+            execution_state.save(exec_state_path, exec_state)
 
     def handle_request(intent):
         """A Rebalance tap. Everything is re-derived fresh -- the button
@@ -869,92 +1187,48 @@ def run():
                             fresh_prices, pair)))
 
         parts.append(notify.escape_md_v2(
-            f"Fresh proposal for {fresh_d.trigger}. Confirm within "
-            f"{PROPOSAL_EXPIRY_SECONDS} seconds or it expires."))
+            f"Fresh proposal for {fresh_d.trigger}. Informational: the "
+            "executor dispatches on trip alerts itself (spec 009); there is "
+            "nothing to confirm here."))
         parts.append(notify.fenced_block(orders.format_proposal(fresh_proposal)))
 
-        keyboard = {"inline_keyboard": [[
-            {"text": "Confirm", "callback_data": f"confirm:{new_pid}"},
-            {"text": "Cancel", "callback_data": f"cancel:{new_pid}"},
-        ]]}
+        # No Confirm/Cancel keyboard: a second human-triggered path into
+        # dispatch is exactly the interleaving spec 009 declines to have.
         delivered, error, message_id = notify.send_text(
-            token, chat_id, "\n\n".join(parts), reply_markup=keyboard)
+            token, chat_id, "\n\n".join(parts))
         if not delivered:
             log.warning("proposal %s failed to send: %s", new_pid, error)
         events.log_command({"from_user_id": user,
                             "command": f"proposal:{new_pid}",
                             "authorized": True, "delivered": delivered})
 
-        # A new proposal supersedes any active one; strip its buttons.
+        # Strip any lingering pre-009 proposal's buttons so an old Confirm
+        # cannot sit half-alive under a retired flow.
         previous = approval_st.get("active_proposal")
         if previous and previous.get("message_id"):
             notify.remove_keyboard(token, chat_id, previous["message_id"])
-        approval_st["active_proposal"] = {
-            "proposal_id": new_pid,
-            "decision_id": decision_id(fresh_ts),
-            "requested_from": check_id,
-            "requested_by": user,
-            "trigger": fresh_d.trigger,
-            "ts": fresh_ts,
-            "message_id": message_id,
-            "ticket": fresh_proposal,
-        }
+        approval_st["active_proposal"] = None
         approval.save_state(approval_p, approval_st)
 
     def handle_confirm(intent):
-        """The terminal step -- and it is a placeholder. It appends the
-        already-derived ticket to orders.jsonl with status "placeholder" and
-        replies with it. NOTHING here submits an order; spec 008 section 8
-        lists what must be true before that ever changes."""
+        """Retired. Spec 009 made the executor autonomous -- dispatch is
+        coupled to trip alerts -- so a Confirm tap must not open a second
+        path into the ledger or the broker. Old messages keep their buttons;
+        this answers them honestly and cleans up any pre-009 active
+        proposal."""
         pid = intent.get("proposal_id")
         user = intent.get("from_user_id")
         label = f"reply:confirm:{pid}"
-        now = datetime.datetime.now(ET)
         active = approval_st.get("active_proposal")
-
-        if not active or active.get("proposal_id") != pid:
-            send_reply(notify.escape_md_v2(
-                "That proposal is not active (superseded or already "
-                "resolved) -- nothing done."), label, user)
-            return
-
-        if proposal_expired(active, now):
+        if active and active.get("proposal_id") == pid:
             if active.get("message_id"):
                 notify.remove_keyboard(token, chat_id, active["message_id"])
             approval_st["active_proposal"] = None
             approval.save_state(approval_p, approval_st)
-            send_reply(notify.escape_md_v2(
-                f"Proposal expired ({PROPOSAL_EXPIRY_SECONDS} s) -- nothing "
-                "done. Tap Rebalance on a current alert to re-derive."),
-                label, user)
-            return
-
-        ticket = active.get("ticket") or {}
-        events.log_order({
-            "proposal_id": pid,
-            "decision_id": active.get("decision_id"),
-            "trigger": active.get("trigger"),
-            "status": "placeholder",
-            "requested_by": active.get("requested_by"),
-            "confirmed_by": user,
-            "proposed_ts": active.get("ts"),
-            "style": ticket.get("style"),
-            "tif": ticket.get("tif"),
-            "marks": ticket.get("marks"),
-            "legs": ticket.get("legs"),
-            "residual_total": ticket.get("residual_total"),
-        })
-        if active.get("message_id"):
-            notify.remove_keyboard(token, chat_id, active["message_id"])
-        approval_st["active_proposal"] = None
-        approval.save_state(approval_p, approval_st)
-
-        send_reply("\n\n".join([
-            notify.escape_md_v2(
-                "Recorded to orders.jsonl. Nothing was submitted to the "
-                "broker -- enter it manually or ignore it."),
-            notify.fenced_block(orders.format_proposal(ticket)),
-        ]), label, user)
+        send_reply(notify.escape_md_v2(
+            "Confirm is retired: the executor dispatches on trip alerts "
+            "itself (spec 009), behind the dry-run and enable rails. This "
+            "tap recorded nothing and submitted nothing."), label, user)
 
     def handle_cancel(intent):
         pid = intent.get("proposal_id")
@@ -1020,12 +1294,16 @@ def run():
         and slicing the wait is exactly the kind of change where it creeps
         back in."""
         process_intents()
+        track_fills()
+        check_unhedged_tickets()
         remaining = seconds
         while remaining > 0:
             step = min(INTENT_CHECK_SECONDS, remaining)
             ib.sleep(step)
             remaining -= step
             process_intents()
+            track_fills()
+            check_unhedged_tickets()
 
     peak_equity = monitor_state.load(path)
 
@@ -1047,7 +1325,12 @@ def run():
     runtime["last_connect_ts"] = events.now_iso()
     runtime["connected"] = True
     runtime_state.write(rt_path, runtime)
-    orphan_scan(ib, send)
+    # The reconcile is the spine (spec 009 section 4): on every connect,
+    # before any decision, rebuild the executor's picture. False means the
+    # order book is UNKNOWN -- dispatch stays refused until a retry succeeds.
+    reconciled = reconcile_on_connect(ib, send, exec_state)
+    execution_state.save(exec_state_path, exec_state)
+    last_fill_count = -1
     checked_sanity = False
     was_connected = True
     checks_since_heartbeat = 0
@@ -1070,10 +1353,13 @@ def run():
                 runtime["last_connect_ts"] = events.now_iso()
                 runtime["connected"] = True
                 runtime_state.write(rt_path, runtime)
-                # Every connect gets the orphan check, not just the first:
-                # the nightly session reset is precisely when a working order
-                # left by hand would be discovered.
-                orphan_scan(ib, send)
+                # Every connect gets the full reconcile, not just the first:
+                # the nightly session reset is precisely when a fill that
+                # fired no events, a DAY expiry, or a hand-entered order
+                # would be discovered.
+                reconciled = reconcile_on_connect(ib, send, exec_state)
+                execution_state.save(exec_state_path, exec_state)
+                last_fill_count = -1
                 continue
 
             if not was_connected:
@@ -1083,6 +1369,15 @@ def run():
                 send("INFO", "reconnected", f"{PAIR_KEY} -- reconnected",
                      "Gateway connection re-established; monitoring resumed.")
                 was_connected = True
+
+            if not reconciled:
+                # The spine must not stay broken silently: retry the reads
+                # each cycle until they answer. Decisions and alerts continue
+                # meanwhile -- only dispatch is refused (section 9's split:
+                # fail closed on the read, no sticky flag).
+                reconciled = reconcile_on_connect(ib, send, exec_state)
+                if reconciled:
+                    execution_state.save(exec_state_path, exec_state)
 
             # Re-derived every cycle, deliberately. Never read from state.
             target = derive_target(base_capital, params, pair)
@@ -1184,13 +1479,19 @@ def run():
                     alerts, d.trigger, now, repeat_minutes)
                 if send_it and kind == "trip":
                     # send_trip owns the keyboard, the superseded-message
-                    # bookkeeping, and the dedup recording.
+                    # bookkeeping, and the dedup recording. The executor is
+                    # coupled to exactly this branch so tickets match alerts
+                    # 1:1 (gate 13).
                     send_trip(state, d, prices, check_ts)
+                    dispatch_on_trip(state, d, details, prices, check_ts)
                 elif send_it and kind == "resolved":
                     send("INFO", "resolved", f"{PAIR_KEY} -- resolved",
                          "No band is tripped. The position is back inside both "
                          "bands and no action is required.")
                     alerts = alert_state.record_sent(alerts, None, now)
+                    # Back inside both bands: every re-issue lineage ended.
+                    execution.clear_issues(exec_state)
+                    execution_state.save(exec_state_path, exec_state)
 
             if alert_state.heartbeat_due(alerts, now, heartbeat_hour, heartbeat_minute):
                 send("INFO", "heartbeat", f"{PAIR_KEY} -- daily heartbeat",

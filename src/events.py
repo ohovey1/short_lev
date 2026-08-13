@@ -83,10 +83,19 @@ def log_command(record):
 
 
 def log_order(record):
-    """One line per proposed ticket. Nothing in this repo submits orders.
-    Three statuses exist: "placeholder" (the approval loop's terminal step),
-    "dry_run" (the executor path rehearsed everything and sent nothing), and
-    "refused" (a rail said no -- the reason rides in the row). Any other
-    status would be a bug until spec 009 deliberately adds a live one."""
+    """One line per order event. Append-only: a leg's current state is the
+    FOLD of its rows (execution.fold_ledger), never one rewritten line.
+
+    Proposal-level statuses (no order_ref): "placeholder" (retired spec 008
+    flow), "dry_run" (the executor rehearsed everything, sent nothing),
+    "refused" (a rail said no; the reason rides in the row).
+
+    Per-leg statuses (keyed by order_ref, spec 009): "submitted" (written
+    BEFORE the wire call -- a submitted order absent from this ledger is
+    unreconcilable, the worst state the system has), "fill" (one row per
+    execution, exec_id is the dedup key), "filled", "expired", "cancelled",
+    "broker_refused" (ValidationError/Inactive -- terminal here whatever
+    ib_async thinks). "foreign_fill" records an execution that is NOT ours so
+    the same orphan event is not re-flagged on every reconnect."""
     record.setdefault("ts", now_iso())
     _append(ORDERS_FILE, record)

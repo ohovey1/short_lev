@@ -26,6 +26,7 @@ from ib_async import IB
 
 import config
 import decision
+import execution
 
 load_dotenv()
 
@@ -60,13 +61,21 @@ def connect():
     port = int(os.environ.get("IB_PORT", 4002))
     client_id = int(os.environ.get("IB_CLIENT_ID", DEFAULT_CLIENT_ID))
 
+    # Spec 009 section 2: readonly is DERIVED from the same env the
+    # submission gate reads -- never a bare literal False. With
+    # EXECUTION_ENABLED anything but "1" the socket itself is read-only, so
+    # through the dry-run day an accidental submit is rejected at the wire
+    # before any rail is even consulted. A free rail; kept as long as
+    # possible (section 8 step 3 is where it comes off, deliberately).
+    readonly = not execution.execution_enabled()
+
     ib = IB()
-    ib.connect(host, port, clientId=client_id, readonly=True)
+    ib.connect(host, port, clientId=client_id, readonly=readonly)
 
     accounts = ib.managedAccounts()
     log.info(
-        "connected: host=%s port=%s clientId=%s accounts=%s (%s)",
-        host, port, client_id, ",".join(accounts) or "none",
+        "connected: host=%s port=%s clientId=%s readonly=%s accounts=%s (%s)",
+        host, port, client_id, readonly, ",".join(accounts) or "none",
         "PAPER" if port == 4002 else "LIVE -- verify this is intended",
     )
 
@@ -276,6 +285,39 @@ def open_orders(ib):
         "client_id": t.order.clientId,
         "order_ref": t.order.orderRef or None,
     } for t in trades]
+
+
+def fills(ib):
+    """Every execution the API reports for this session, as plain dicts.
+
+    A read, for the reconcile spine. ib.fills() is populated by the
+    connect-time executions sync, which ib_async issues on EVERY connect
+    regardless of the readonly flag -- so fills that happened while
+    disconnected arrive here as data even though their events never fired
+    (execution-notes section 3). exec_id is the dedup key: replays and
+    event/reconcile overlap both deliver the same execution twice.
+
+    Returns None when the read itself failed -- the caller must treat None
+    as "unknown", never as "no fills".
+    """
+    try:
+        raw = ib.fills()
+    except Exception as exc:
+        log.error("fills read failed: %s: %s -- fill state UNKNOWN",
+                  type(exc).__name__, exc)
+        return None
+
+    return [{
+        "exec_id": f.execution.execId,
+        "time": str(f.execution.time),
+        "symbol": f.contract.symbol,
+        "side": f.execution.side,
+        "shares": f.execution.shares,
+        "price": f.execution.price,
+        "perm_id": f.execution.permId,
+        "client_id": f.execution.clientId,
+        "order_ref": f.execution.orderRef or None,
+    } for f in raw]
 
 
 def leg_details(ib, pair_key):

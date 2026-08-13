@@ -28,6 +28,7 @@ Every default points at refusal: no env, no files, no configuration at all
 means nothing can ever be sent.
 """
 
+import datetime
 import json
 import logging
 import os
@@ -55,6 +56,35 @@ DEFAULT_ORPHAN_FLAG_PATH = os.path.join(
     "orphan_orders.json"
 )
 
+# The ownership tag. Every order this executor submits carries
+# orderRef "shortlev:<proposal_id>:<ticker>"; anything bearing the prefix is
+# ours and traceable to its orders.jsonl rows, anything without it is foreign
+# (execution-notes section 2). clientId is deliberately NOT the discriminator
+# -- it is one .env edit from changing.
+ORDER_REF_PREFIX = "shortlev:"
+
+# Ledger statuses that end a leg's lifecycle. "refused", "dry_run", and
+# "placeholder" are proposal-level rows that never carry an order_ref, so they
+# never enter the per-leg fold at all.
+TERMINAL_STATUSES = ("filled", "expired", "cancelled", "broker_refused")
+
+# ib_async parks a Read-Only or validation rejection (e.g. error 321) in
+# ValidationError, which it keeps in ActiveStates: isDone() never returns True
+# and cancelledEvent never fires, so an executor awaiting completion hangs
+# forever. It is terminal HERE, whatever ib_async thinks. Inactive is IB's own
+# "invalid or blocked" verdict and gets the same treatment.
+TERMINAL_REFUSAL_STATUSES = ("ValidationError", "Inactive")
+
+# Spec 009 section 5: if one leg of a two-leg ticket is complete and the other
+# is not after this many minutes, alert CRITICAL. Detection bounds the fill
+# gap; sequencing the sends would not. The default is a flagged guess.
+UNHEDGED_ALERT_MINUTES = 10
+
+# Spec 009 section 7: after this many consecutive re-issues of the same
+# trigger without a fill, nudge WARNING that the limit style may be wrong for
+# the pair. A nudge, not an action. The default is a flagged guess.
+REISSUE_WARN_COUNT = 3
+
 # allow is True only when a live submission may proceed. mode is "live",
 # "dry_run", or "blocked"; reason is human-readable and is logged on every
 # refusal.
@@ -72,6 +102,28 @@ def orphan_flag_path():
 def max_order_multiple():
     raw = os.environ.get("MAX_ORDER_MULTIPLE")
     return float(raw) if raw not in (None, "") else MAX_ORDER_MULTIPLE
+
+
+def unhedged_minutes():
+    raw = os.environ.get("UNHEDGED_ALERT_MINUTES")
+    return float(raw) if raw not in (None, "") else UNHEDGED_ALERT_MINUTES
+
+
+def reissue_warn_count():
+    raw = os.environ.get("REISSUE_WARN_COUNT")
+    return int(raw) if raw not in (None, "") else REISSUE_WARN_COUNT
+
+
+def execution_enabled(env=None):
+    """Exactly one definition of "is execution enabled".
+
+    Two callers: submission_gate (rail 4) and broker.connect, which derives
+    its readonly flag as `not execution_enabled()` -- never a bare literal.
+    One definition means the connection can never be writable while the gate
+    still reads disabled, or vice versa.
+    """
+    env = os.environ if env is None else env
+    return (env.get("EXECUTION_ENABLED") or "").strip() == "1"
 
 
 def size_clamp(proposal, target, max_multiple=MAX_ORDER_MULTIPLE):
@@ -130,7 +182,7 @@ def submission_gate(env=None):
         return Gate(False, "dry_run",
                     "DRY_RUN is not '0' (the default): computing and logging "
                     "everything, submitting nothing")
-    if (env.get("EXECUTION_ENABLED") or "").strip() != "1":
+    if not execution_enabled(env):
         return Gate(False, "blocked", "EXECUTION_ENABLED is not '1'")
     return Gate(True, "live", "all rails clear")
 
@@ -160,6 +212,275 @@ def flag_orphans(found):
     return path
 
 
+def order_ref(proposal_id, ticker):
+    """The orderRef tag for one leg: shortlev:<proposal_id>:<ticker>."""
+    return f"{ORDER_REF_PREFIX}{proposal_id}:{ticker}"
+
+
+def is_ours(ref):
+    """Ownership by orderRef prefix. Foreign until proven ours: a manual
+    ticket's empty ref, None, and any other tool's tag all say foreign."""
+    return bool(ref) and ref.startswith(ORDER_REF_PREFIX)
+
+
+def is_terminal_refusal(status):
+    """True when a status string means the broker refused and will never
+    progress the order -- despite ib_async keeping it in ActiveStates. The
+    submit path must treat these as done-and-failed; waiting on isDone()
+    hangs forever (execution-notes section 4)."""
+    return status in TERMINAL_REFUSAL_STATUSES
+
+
+def fill_totals(fills):
+    """(shares, notional) summed over plain fill dicts, notional to the cent.
+
+    The one accounting primitive. Everything that counts shares or dollars
+    derives from execution rows like these -- never from counting status
+    callbacks, which IB documents as both duplicable and droppable.
+    """
+    shares = sum(f.get("shares") or 0 for f in fills)
+    notional = sum((f.get("shares") or 0) * (f.get("price") or 0.0)
+                   for f in fills)
+    return shares, round(notional, 2)
+
+
+def read_ledger(path=None):
+    """All orders.jsonl rows, oldest first. Missing file is an empty ledger.
+
+    Same defensive line-by-line read as monitor.find_check: one corrupt line
+    (a crash mid-append) must not take the whole ledger with it.
+    """
+    if path is None:
+        path = os.path.join(events.event_log_dir(), events.ORDERS_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def fold_ledger(rows):
+    """Fold append-only rows into one state per orderRef: {ref: leg dict}.
+
+    The ledger never rewrites a line, so a leg's current state is the fold of
+    every row bearing its order_ref: the "submitted" row carries the ticket,
+    "fill" rows accumulate executions keyed by exec_id (the dedup key --
+    replays and event/reconcile overlap both hand us the same execution
+    twice), lifecycle rows move `status`, and perm_id sticks from whichever
+    row first carried it. Rows without an order_ref (placeholder, dry_run,
+    refused, foreign_fill) are proposal-level or foreign and never fold.
+    """
+    legs = {}
+    for row in rows:
+        ref = row.get("order_ref")
+        if not ref:
+            continue
+        leg = legs.setdefault(ref, {
+            "order_ref": ref, "perm_id": None, "proposal_id": None,
+            "ticker": None, "side": None, "shares": None, "limit": None,
+            "trigger": None, "status": None, "fills": {},
+        })
+        if row.get("perm_id"):
+            leg["perm_id"] = row["perm_id"]
+        status = row.get("status")
+        if status == "submitted":
+            for key in ("proposal_id", "ticker", "side", "shares", "limit",
+                        "trigger"):
+                if row.get(key) is not None:
+                    leg[key] = row[key]
+            leg["status"] = "submitted"
+        elif status == "fill":
+            exec_id = row.get("exec_id") or f"row-{len(leg['fills'])}"
+            leg["fills"][exec_id] = {"shares": row.get("shares"),
+                                     "price": row.get("price")}
+        elif status == "partial" or status in TERMINAL_STATUSES:
+            leg["status"] = status
+    for leg in legs.values():
+        shares, notional = fill_totals(leg["fills"].values())
+        leg["filled_shares"] = shares
+        leg["filled_notional"] = notional
+    return legs
+
+
+def classify(ledger_rows, open_rows, fill_rows):
+    """Spec 009 section 4's table as a pure function. Returns findings.
+
+    Inputs are plain data -- raw ledger rows, broker.open_orders dicts,
+    broker.fills dicts -- so every case is testable from fixtures with no
+    Gateway. The caller applies the actions; this only names what it sees.
+
+    Ownership matching is orderRef-prefix first, perm_id-against-ledger as
+    the fallback, so the answer to open question 2 (is orderRef echoed
+    across clientIds?) adjusts which branch matches, not the shape.
+
+    Each finding is {"case": <one of six>, ...context}:
+      working            in ledger, still working -- track it
+      filled_while_away  in ledger, gone, executions cover the size
+      expired            in ledger, gone, nothing filled (DAY expiry -- or a
+                         submit that died between ledger write and the wire,
+                         which reconciles to the same "no order, no fill")
+      partial            in ledger with fills short of the size; "working"
+                         says whether the remainder is still live or was
+                         cancelled at the close
+      orphan_working     working order not in the ledger -- the existing rail
+      orphan_filled      an execution not in the ledger: something traded
+                         with no record. The worst state; CRITICAL.
+
+    Fills already recorded in the ledger are excluded by exec_id, foreign
+    ones via their "foreign_fill" rows -- otherwise every reconnect would
+    re-flag the same event forever and train reflexive flag-clearing.
+    """
+    legs = fold_ledger(ledger_rows)
+    recorded = {row["exec_id"] for row in ledger_rows if row.get("exec_id")}
+    perm_to_ref = {leg["perm_id"]: ref for ref, leg in legs.items()
+                   if leg["perm_id"]}
+
+    open_by_ref, orphan_orders = {}, []
+    for row in open_rows:
+        ref = _match(row, legs, perm_to_ref)
+        if ref:
+            open_by_ref[ref] = row
+        else:
+            orphan_orders.append(row)
+
+    new_fills, orphan_fills = match_fills(legs, recorded, fill_rows)
+
+    findings = []
+    for ref, leg in legs.items():
+        unseen = new_fills.get(ref, [])
+        if leg["status"] in TERMINAL_STATUSES and not unseen:
+            continue
+        working = ref in open_by_ref
+        filled = leg["filled_shares"] + fill_totals(unseen)[0]
+        total = leg["shares"] or 0
+        if working:
+            if filled > 0:
+                findings.append({"case": "partial", "order_ref": ref,
+                                 "leg": leg, "new_fills": unseen,
+                                 "working": True, "filled_shares": filled,
+                                 "total_shares": total})
+            else:
+                findings.append({"case": "working", "order_ref": ref,
+                                 "leg": leg, "order": open_by_ref[ref]})
+        elif total and filled >= total:
+            findings.append({"case": "filled_while_away", "order_ref": ref,
+                             "leg": leg, "new_fills": unseen})
+        elif filled > 0:
+            findings.append({"case": "partial", "order_ref": ref,
+                             "leg": leg, "new_fills": unseen,
+                             "working": False, "filled_shares": filled,
+                             "total_shares": total})
+        else:
+            findings.append({"case": "expired", "order_ref": ref,
+                             "leg": leg})
+
+    findings.extend({"case": "orphan_working", "order": o}
+                    for o in orphan_orders)
+    findings.extend({"case": "orphan_filled", "fill": f}
+                    for f in orphan_fills)
+    return findings
+
+
+def _match(row, legs, perm_to_ref):
+    """One ownership rule for open-order rows and fill rows both: orderRef
+    prefix first, perm_id against the ledger as the fallback. Returns the
+    ledger orderRef, or None for foreign."""
+    ref = row.get("order_ref")
+    if is_ours(ref) and ref in legs:
+        return ref
+    return perm_to_ref.get(row.get("perm_id"))
+
+
+def match_fills(legs, recorded_exec_ids, fill_rows):
+    """Route fill rows to their ledger legs: ({ref: [fills]}, [foreign]).
+
+    Shared by the connect-time classify and the monitor's intra-session fill
+    tracker, so both apply the identical ownership rule. Rows whose exec_id
+    the ledger already carries (foreign_fill rows included) are dropped --
+    replays and event/reconcile overlap both deliver duplicates, and the
+    dedup is what makes reprocessing harmless.
+    """
+    perm_to_ref = {leg["perm_id"]: ref for ref, leg in legs.items()
+                   if leg["perm_id"]}
+    new_by_ref, foreign = {}, []
+    for row in fill_rows:
+        if row.get("exec_id") in recorded_exec_ids:
+            continue
+        ref = _match(row, legs, perm_to_ref)
+        if ref:
+            new_by_ref.setdefault(ref, []).append(row)
+        else:
+            foreign.append(row)
+    return new_by_ref, foreign
+
+
+def _parse_ts(ts):
+    """ISO timestamp -> aware datetime, or None. Naive values are read as
+    local time -- events.now_iso always writes an offset, so naive only
+    appears in hand-built fixtures."""
+    try:
+        parsed = datetime.datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return None
+    return parsed.astimezone() if parsed.tzinfo is None else parsed
+
+
+def check_unhedged(ticket, now, minutes):
+    """True when a multi-leg ticket has been one-legged past the alert bound.
+
+    Pure over the persisted ticket state: legs with their "complete" flags,
+    the timestamp the first leg completed, and whether the alert already
+    fired (it fires once per ticket -- the caller sets unhedged_alerted).
+    Sequencing the sends would not bound this exposure; detection does
+    (spec 009 section 5).
+    """
+    if ticket.get("unhedged_alerted"):
+        return False
+    legs = ticket.get("legs") or {}
+    if len(legs) < 2:
+        return False
+    complete = sum(1 for leg in legs.values() if leg.get("complete"))
+    if complete == 0 or complete == len(legs):
+        return False
+    first = _parse_ts(ticket.get("first_complete_ts"))
+    if first is None:
+        return False
+    return (now - first).total_seconds() >= minutes * 60
+
+
+def note_issue(state, trigger):
+    """Count a proposal issue for a trigger; returns consecutive issues.
+
+    The re-issue nudge (section 7) is `issues - 1 >= reissue_warn_count()`:
+    the first issue is not a re-issue. Cleared by clear_issues on a fill or
+    on the trip resolving.
+    """
+    counts = state.setdefault("reissue", {})
+    counts[trigger] = counts.get(trigger, 0) + 1
+    return counts[trigger]
+
+
+def clear_issues(state, trigger=None):
+    """Reset the re-issue count for one trigger, or all when trigger is None
+    (the position came back inside both bands -- every lineage ended)."""
+    if trigger is None:
+        state["reissue"] = {}
+    else:
+        state.setdefault("reissue", {}).pop(trigger, None)
+
+
 def _ticket_fields(proposal):
     proposal = proposal or {}
     return {
@@ -180,7 +501,7 @@ def _refuse(proposal, reason, extra):
     return "refused"
 
 
-def dispatch(proposal, target, send=None, extra=None):
+def dispatch(proposal, target, send=None, extra=None, ib=None):
     """The executor path. Today it can refuse or dry-run; it cannot submit.
 
     Clamp first, then the gate: an oversized ticket is refused in every mode,
@@ -189,8 +510,10 @@ def dispatch(proposal, target, send=None, extra=None):
 
     send is the monitor's alert closure (severity, kind, title, body) -- this
     module owns no Telegram credentials. extra rides into the orders.jsonl
-    row (proposal ids, who confirmed). Returns the status string written to
-    orders.jsonl: "refused" or "dry_run".
+    row (proposal ids, who confirmed). ib is the broker handle the live
+    branch will need once spec 009's submit call lands there; every other
+    branch ignores it. Returns the status string written to orders.jsonl:
+    "refused" or "dry_run".
     """
     allow, reason = size_clamp(proposal, target, max_order_multiple())
     if not allow:

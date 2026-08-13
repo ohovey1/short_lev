@@ -123,13 +123,18 @@ re-clone that wipes the file resets the peak and silently disables the drawdown 
 A malformed state file makes the monitor exit loudly rather than reinitialize, for
 the same reason.
 
-On the VPS all three runtime paths live in `/var/lib/short-lev`, created by the
-monitor unit's `StateDirectory=`: `MONITOR_STATE_PATH`, `ALERT_STATE_PATH`, and
-`EVENT_LOG_DIR`. See `docs/VPS.md` section 8.
+On the VPS all runtime paths live in `/var/lib/short-lev`, created by the
+monitor unit's `StateDirectory=`: `MONITOR_STATE_PATH`, `ALERT_STATE_PATH`,
+`EVENT_LOG_DIR`, and (spec 009) `EXECUTION_STATE_PATH=/var/lib/short-lev/execution_state.json`.
+See `docs/VPS.md` section 8.
 
 ### What the monitor deliberately does not do
 
-- **Submit orders.** Not now, not behind a flag.
+- **Touch the wire itself.** Spec 009 routes tripped decisions through
+  `execution.dispatch` — four default-off rails, one auditable line — and every
+  wire-touching line lives in `src/execution.py`, never in the monitor.
+  Terminal triggers (drawdown stop) never dispatch at all; they alert until a
+  human acts.
 - **Persist the de-risk target.** `evaluate()` returns a ratcheted `new_target` on a
   margin de-risk; the monitor reports it and throws it away. It does not trade, so
   moving the reference for a trade that never happened would corrupt every
