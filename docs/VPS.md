@@ -66,6 +66,9 @@ sudo systemctl restart short-lev-monitor   # safe any time
 sudo systemctl restart short-lev-bot       # safe any time: no Gateway, no IBKR connection
 sudo systemctl restart short-lev-vnc       # safe: does not touch Gateway
 sudo systemctl restart short-lev-gateway   # IBC logs back in; monitor reconnects in ~10s
+
+# Restart everything
+sudo systemctl restart short-lev-xvfb short-lev-gateway short-lev-vnc short-lev-monitor short-lev-bot
 ```
 
 Nothing here needs tmux. The stack is under systemd and survives reboots.
