@@ -544,4 +544,113 @@ not run as not run.
 
 ## Result
 
-<!-- Filled in after the session. -->
+**Offline gates pass (2, 9, 10, 11, 17, and the offline halves of 4, 5, 6, 8,
+15). Every gate needing the group, the paper account, or the VPS is not run
+and is the operator's.** Nothing is committed; the diff is in the working
+tree for review.
+
+### What shipped
+
+All of sections 2-7 plus the section 1 `migrate_to_chat_id` handler. New:
+`src/orders.py`, `src/bot.py`, `src/approval.py`, `src/runtime_state.py`,
+`deploy/short-lev-bot.service`, `scripts/verify_orders.py`,
+`scripts/verify_bot.py`. Changed: `src/monitor.py` (widened check_record,
+runtime.json, trip keyboards, intent processing, sliced sleep),
+`src/notify.py` (public `send_text` with keyboards and message ids, block
+escaping, alert catalog, migrate handler), `src/broker.py` (`leg_prices` ->
+`leg_details`), `src/events.py` (commands.jsonl, orders.jsonl),
+`deploy/install-units.sh`, `.env.example`, `docs/VPS.md`,
+`scripts/verify_monitor.py` (checks s, t, u).
+
+`decision.py`, `band.py`, `engine.py`, `config.py` untouched;
+`hash_band.py`'s GRAND digest is
+`08baa20ac842502aedbb5f647f6ea24cf3128429f17f4a5a1d7d1d0cb85de942`, identical
+to `baseline_005_hash.txt`, captured before the first edit and re-checked
+after the last. `grep -rn "placeOrder" src/` and
+`grep -n "import broker\|IB(" src/bot.py` both return nothing (gate 17), and
+verify_bot check i re-runs both mechanically on every offline run.
+
+### Gate status
+
+| # | Gate | Status |
+|---|---|---|
+| 1 | Unauthorized silence | Offline half PASS (verify_bot b); live send **not run** |
+| 2 | migrate_to_chat_id handled | **PASS** (verify_bot a, synthetic payload; no .env write path exists) |
+| 3 | Four commands render in the group | **Not run** -- needs the group and a phone |
+| 4 | /help covers all kinds, severities match | Offline PASS (verify_bot d, generated from the one table); live render **not run** |
+| 5 | /positions arithmetic | Offline PASS (verify_bot g); TWS comparison **not run** |
+| 6 | Staleness verdict | Offline PASS (verify_bot e); live stop-the-monitor test **not run** |
+| 7 | /status after restart | **Not run** |
+| 8 | Offset persistence | Offline round-trip PASS (verify_bot c); live restart sequence **not run** |
+| 9 | Limit price arithmetic | **PASS** (verify_orders a-d: both formulas, both directions, exact to 1e-9) |
+| 10 | Ticket and alert agree | **PASS** (verify_orders e, under the interpretation below) |
+| 11 | De-risk is marketable | **PASS** (verify_orders f, g) |
+| 12-16 | Approval round trips | Offline pieces PASS (expiry: verify_monitor u; idempotency files: verify_bot h); live taps **not run** |
+| 17 | The invariant greps | **PASS** (by hand and verify_bot i) |
+| 18 | Both units survive reboot | **Not run** |
+
+### Deviations from the spec
+
+1. **Gate 10 cannot hold literally, and was resolved by review.** The ticket
+   prices at the boundary, the alert at the mark, so the two dollar amounts
+   cannot both match "to the cent". Decided 2026-08-13: share counts must be
+   identical (both derived from the dollar delta at the current mark,
+   rounded), and every dollar figure on each artifact derives from that
+   rounded count at its own price. Two further review decisions: the foil
+   decay trip's second leg (the underlying, which has no boundary formula)
+   rests at the current mark with its basis stated; `TELEGRAM_ACTION_USER_IDS`
+   unset means everyone in the group, as section 7 wrote it.
+2. **"Nine alert kinds" is ten table rows.** The spec's own /help table lists
+   leg_check at both WARNING and INFO. The catalog (`notify.ALERT_KINDS`)
+   carries all ten rows; the four trip severities are generated from
+   `TRIGGER_SEVERITY`, which moved to `notify.py` -- the bot must render the
+   table but must not import the monitor, which drags in the broker.
+3. **check_record gained more than the spec's list**: the two band fractions
+   (so /positions can state "x% of a y% band" without the bot re-deriving
+   params -- the row self-describes), `ts`, `decision_id`, and per-leg
+   average cost (review decision: include). `broker.leg_prices` became
+   `leg_details` to carry shares and average cost; same read, wider return.
+4. **Two modules the spec did not name.** `runtime_state.py`: runtime.json is
+   written by the monitor and read by the bot, and neither may import the
+   other, so the path resolver and atomic writer needed a shared home.
+   `approval.py`: same argument for the intent files. Also one state file the
+   spec did not name, `approval_state.json` (active proposal, trip message
+   ids, intent cursor) -- kept out of `alert_state.json` for spec 006's
+   losing-it-costs-what reasoning.
+5. **Confirm expiry is validated at processing time**, not tap time: the
+   expiry exists so the marks cannot have moved under the ticket, and they
+   keep moving while an intent waits in the file. Worst case a tap near the
+   deadline is refused up to one 10-second slice late -- refusal is the safe
+   direction.
+6. **Request ids are consumed permanently.** After a proposal expires,
+   re-tapping the SAME alert's button replies "already handled"; a fresh
+   proposal needs a fresh alert, which the standing-trip repeat (60 min)
+   provides. Simplest idempotency that satisfies gates 15/16; if the wait
+   feels wrong in use, revisit deliberately.
+7. **Button-triggered evaluations are logged to checks.jsonl** as ordinary
+   rows -- they are real checks, and the fresh proposal needs a decision_id
+   that resolves. The intraday-cadence dataset now contains intent-triggered
+   rows as well as timer rows.
+8. **/positions derives displayed notionals from the displayed two-decimal
+   price** (marketValue still drives the band math). Gate 5 says a reader
+   multiplies the two numbers shown; with the raw marketValue printed beside
+   a rounded price, that multiplication fails by cents.
+9. **bot.py uses time.sleep, deliberately.** There is no asyncio loop in that
+   process and ib.sleep would require importing ib_async, which it must not.
+   The ib.sleep rule is the monitor's, where the sliced sleep uses it for
+   every slice; verify_bot i mechanically confirms monitor.py never imports
+   time.
+10. **install-units.sh installs and enables the fifth unit** -- not in this
+    spec's text, but spec 007's reconciliation lesson says a unit the install
+    script skips is a hand-fix waiting to be forgotten.
+
+### Left for the operator
+
+- The live gate runs above (1, 3-8, 12-16, 18), including the phone-rendering
+  check that fenced columns hold in the mobile client.
+- BotFather: confirm privacy mode Enabled, `/setcommands` for the four
+  commands, `/setdescription` -- all before the stakeholder joins.
+- The 25bp marketable offset and the 60-second expiry remain guesses to
+  sanity-check against observed TSLL/TSLA behavior once tickets flow.
+- Section 8 stands unchanged: nothing here submits an order, and the list of
+  what must be true before the placeholder becomes one is unshrunk.
