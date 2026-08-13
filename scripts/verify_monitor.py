@@ -35,6 +35,16 @@ Spec 007 adds:
      up.
   r. The heartbeat fires only inside its window, in ET, and a naive timestamp
      written before the tz switch does not raise on comparison.
+
+Spec 008 adds:
+  s. check_record carries the widened fields (shares, marks, average cost,
+     band fractions) and a deterministic eight-hex decision_id; proposal_id
+     for the same timestamp is distinct, so the two id spaces cannot collide
+     in the consumed-intent set.
+  t. runtime.json round-trips, leaves no partial file behind, never raises on
+     an unwritable path, and reads None (not an exception) when malformed.
+  u. The confirm expiry (gate 15's arithmetic): valid inside 60 seconds,
+     refused past it, and an unreadable timestamp refuses rather than allows.
 """
 
 import datetime
@@ -58,6 +68,7 @@ import events
 import monitor
 import monitor_state
 import notify
+import runtime_state
 
 # broker/monitor call this at import too; calling it here makes the ACCOUNT
 # lookup below independent of import order.
@@ -378,8 +389,8 @@ def check_m():
         prior = os.environ.get("EVENT_LOG_DIR")
         os.environ["EVENT_LOG_DIR"] = tmp
         try:
-            sent = notify.notify(None, None, "WARNING", "trip", "t", "b")
-            sent_blank = notify.notify("", "", "WARNING", "trip", "t", "b")
+            sent, _ = notify.notify(None, None, "WARNING", "trip", "t", "b")
+            sent_blank, _ = notify.notify("", "", "WARNING", "trip", "t", "b")
             wrote = os.path.exists(os.path.join(tmp, events.ALERTS_FILE))
         finally:
             if prior is None:
@@ -609,12 +620,114 @@ def check_r():
                      f"naive ts compares without raising={tz_ok}")
 
 
+def check_s():
+    """Spec 008. The widened record is how the bot sees the position at all
+    -- the alternative was a second IBKR connection, which is the invariant
+    this spec exists to keep. decision_id and proposal_id must never collide:
+    both land in the same consumed-intent set."""
+    state = decision.PositionState(
+        short_notional=7500.0, long_notional=13600.0, leverage=2,
+        target=6818.18, account_equity=10000.0, peak_equity=10000.0,
+        margin_required=7000.0,
+        margin_multiplier=config.margin_multiplier(config.PAIRS["TSLL"]),
+    )
+    params = monitor.band_params()
+    d = decision.evaluate(state, params)
+    details = {
+        "TSLL": {"price": 9.375, "shares": 800, "avg_cost": 9.10},
+        "TSLA": {"price": 340.0, "shares": 40, "avg_cost": 300.0},
+    }
+    ts = "2026-08-13T14:36:00-04:00"
+    row = monitor.check_record(state, d, False, params, details, ts)
+
+    expected_keys = {"short_shares", "long_shares", "short_price",
+                     "long_price", "short_avg_cost", "long_avg_cost",
+                     "long_short_band", "foil_decay_band", "decision_id", "ts"}
+    missing = expected_keys - set(row)
+    check_id = row["decision_id"]
+    hex_ok = len(check_id) == 8 and all(c in "0123456789abcdef" for c in check_id)
+    stable = check_id == monitor.decision_id(ts)
+    distinct = monitor.proposal_id(ts) != check_id
+
+    ok = (not missing and hex_ok and stable and distinct
+          and row["short_shares"] == 800 and row["long_price"] == 340.0
+          and row["short_avg_cost"] == 9.10
+          and row["foil_decay_band"] == params.foil_decay_band)
+    return check("s. check_record is widened; decision_id is 8 hex and "
+                 "distinct from proposal_id",
+                 ok, f"missing keys: {sorted(missing) or 'none'}, "
+                     f"id={check_id!r} stable={stable}, "
+                     f"proposal_id distinct={distinct}")
+
+
+def check_t():
+    """Spec 008. runtime.json feeds /status. Atomic (temp + rename) so the
+    poller can never parse a truncated file; never raises, because telemetry
+    is not worth the loop; malformed reads as None, which the bot renders as
+    its Stale verdict."""
+    record = {"started_at": "2026-08-13T09:31:00-04:00",
+              "last_check_ts": "2026-08-13T14:32:00-04:00",
+              "last_connect_ts": "2026-08-13T09:31:05-04:00",
+              "cycles_since_start": 13, "connected": True, "last_error": None}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "nested", "runtime.json")
+        runtime_state.write(path, record)
+        restored = runtime_state.read(path)
+        no_tmp_left = not os.path.exists(path + ".tmp")
+
+        with open(path, "w") as f:
+            f.write("{not json")
+        malformed = runtime_state.read(path)
+
+    # A path under a FILE, so the write cannot succeed.
+    with tempfile.NamedTemporaryFile(suffix=".notadir", delete=False) as f:
+        blocker = f.name
+    try:
+        runtime_state.write(os.path.join(blocker, "runtime.json"), record)
+        raised = False
+    except Exception:
+        raised = True
+    finally:
+        os.unlink(blocker)
+
+    ok = (restored == record and no_tmp_left and malformed is None
+          and not raised)
+    return check("t. runtime.json round-trips atomically and never raises",
+                 ok, f"round_trips={restored == record}, tmp file left="
+                     f"{not no_tmp_left}, malformed reads as "
+                     f"{malformed!r}, unwritable raised={raised}")
+
+
+def check_u():
+    """Spec 008 gate 15, the offline half. Expiry is validated at PROCESSING
+    time -- the point is that the marks have not moved under the ticket --
+    and an unreadable timestamp must refuse, never allow."""
+    et = monitor.ET
+    posted = datetime.datetime(2026, 8, 13, 14, 36, 0, tzinfo=et)
+    active = {"proposal_id": "ef56ab78", "ts": posted.isoformat(timespec="seconds")}
+
+    inside = monitor.proposal_expired(
+        active, posted + datetime.timedelta(seconds=59))
+    at_edge = monitor.proposal_expired(
+        active, posted + datetime.timedelta(seconds=60))
+    past = monitor.proposal_expired(
+        active, posted + datetime.timedelta(seconds=61))
+    unreadable = monitor.proposal_expired({"ts": "not a timestamp"}, posted)
+    absent = monitor.proposal_expired(None, posted)
+
+    ok = (not inside and not at_edge and past and unreadable and absent)
+    return check("u. confirm expiry: valid to 60s, refused past, unreadable refuses",
+                 ok, f"59s={inside} 60s={at_edge} 61s={past} "
+                     f"unreadable={unreadable} absent={absent}")
+
+
 def main():
     results = [
         check_a(), check_b(), check_c(), check_d(), check_e(),
         check_f(), check_g(), check_h(), check_i(), check_j(),
         check_k(), check_l(), check_m(), check_n(), check_n2(),
-        check_o(), check_p(), check_q(), check_r(),
+        check_o(), check_p(), check_q(), check_r(), check_s(),
+        check_t(), check_u(),
     ]
     print("=" * 60)
     if all(results):
