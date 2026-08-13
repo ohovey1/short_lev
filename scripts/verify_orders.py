@@ -12,9 +12,10 @@ Checks:
      passive buy), and held_shares x limit lands exactly on target x (1+band).
   b. Foil decay, short too SMALL: boundary above the mark (a passive sell),
      landing exactly on target x (1-band).
-  c. Long-short, net delta positive: the long-leg boundary reproduces
-     |net_delta| = band x target exactly, with the short frozen at its mark.
-  d. Long-short, net delta negative: same, other side.
+  c. Long-short, net delta positive: the long leg routes MARKETABLY, through
+     the mark -- its band boundary always sits through the spread, so a limit
+     there would be a market order wearing a passive label (spec 009 fix).
+  d. Long-short, net delta negative: same, other side (marketable buy).
   e. Gate 10: ticket and alert state the same share counts, and every dollar
      figure on each derives from the rounded count at its own price.
   f. Gate 11: margin de-risk prices through the touch (buy above mark, sell
@@ -24,6 +25,10 @@ Checks:
   i. A sub-one-share leg renders as an explicit no-trade, not a $0 order.
   j. orders.py is pure: no imports at all -- no broker, no requests, no I/O.
   k. The rendered proposal is self-consistent and says nothing was sent.
+  l. The permanent passive-rest invariant catches a mislabelled leg. Every
+     proposal built through propose() is swept by assert_passive_rests, so a
+     future edit that reintroduces a crossing "passive" leg fails whichever
+     check builds it; this check proves the assertion itself still bites.
 """
 
 import os
@@ -61,9 +66,36 @@ def make_state(short, long_, equity=10000.0, peak=10000.0, maint=7000.0):
     )
 
 
+def assert_passive_rests(proposal, marks):
+    """The permanent invariant behind the spec 009 direction fix: any leg
+    whose basis claims a band boundary must actually REST -- a buy strictly
+    below the mark, a sell strictly above it. A "passive" limit on the
+    crossing side of the mark is a market order wearing a passive label, which
+    is exactly the mislabel the long-short long leg used to carry. Raises, so
+    whichever check builds a violating proposal fails on the spot."""
+    for leg in proposal.get("legs", []):
+        if not leg.get("tradeable"):
+            continue
+        basis = leg.get("basis", "")
+        # Passive-labelled means the LIMIT is a band boundary. A marketable
+        # basis may mention the word "boundary" in its explanation; what it
+        # starts with is the claim being audited.
+        if basis.startswith("marketable") or "boundary" not in basis:
+            continue
+        mark = marks[leg["ticker"]]
+        limit = leg["limit_exact"]
+        rests = limit < mark if orders._is_buy(leg["side"]) else limit > mark
+        assert rests, (
+            f"{leg['ticker']} {leg['side']} labelled {leg['basis']!r} has "
+            f"limit {limit:.6f} on the crossing side of mark {mark:.6f}")
+
+
 def propose(state, marks, held):
     d = decision.evaluate(state, PARAMS)
-    return d, orders.build_proposal(state, d, PARAMS, marks, held, PAIR)
+    proposal = orders.build_proposal(state, d, PARAMS, marks, held, PAIR)
+    if proposal is not None:
+        assert_passive_rests(proposal, marks)
+    return d, proposal
 
 
 def leg_by_ticker(proposal, ticker):
@@ -118,47 +150,57 @@ def check_b():
 
 
 def check_c():
-    """Long drifted to 14,400 against 2 x 6,800 = 13,600: net delta +800 with a
-    681.82 band. At the derived long price the net delta must equal the band
-    exactly, with the short frozen at its current mark."""
+    """Long drifted to 14,400 against 2 x 6,800 = 13,600: net delta +800, the
+    fix is selling the long leg. The boundary price sits BELOW the mark, so a
+    limit there would fill immediately -- spec 009 routes this leg through the
+    marketable path instead, honestly labelled, with the tight offset as the
+    damage cap rather than a boundary a band-width away."""
     held = {"TSLL": 800, "TSLA": 40}
     marks = {"TSLL": 8.50, "TSLA": 360.0}
     state = make_state(short=6800.0, long_=14400.0)
     d, proposal = propose(state, marks, held)
 
     leg = leg_by_ticker(proposal, "TSLA")
-    band_dollars = PARAMS.long_short_band * TARGET
-    net_at_limit = held["TSLA"] * leg["limit_exact"] - state.leverage * state.short_notional
+    off = orders.DEFAULT_MARKETABLE_OFFSET
     ok = (
         d.trigger == "long-short band"
         and leg["side"] == "SELL"
-        and abs(net_at_limit - band_dollars) < 1e-9
+        and proposal["style"] == orders.MARKETABLE
+        and leg["basis"].startswith("marketable")
+        and abs(leg["limit_exact"] - marks["TSLA"] * (1 - off)) < 1e-9
     )
-    return check("c. long-short (net delta +): boundary reproduces the band exactly",
-                 ok, f"trigger={d.trigger}, {leg['side']} limit_exact="
-                     f"{leg['limit_exact']:.6f}, net delta at limit "
-                     f"{net_at_limit:.6f} vs band {band_dollars:.6f}")
+    return check("c. long-short (net delta +): marketable sell through the mark, "
+                 "never a boundary limit",
+                 ok, f"trigger={d.trigger}, style={proposal['style']}, "
+                     f"{leg['side']} limit_exact={leg['limit_exact']:.6f} vs "
+                     f"mark {marks['TSLA']} (-{off * 1e4:.0f}bp), "
+                     f"basis={leg['basis']!r}")
 
 
 def check_d():
-    """Other side: long fell to 12,800, net delta -800."""
+    """Other side: long fell to 12,800, net delta -800, the fix is buying.
+    The boundary would sit ABOVE the mark -- also a crossing limit -- so this
+    direction routes marketably too."""
     held = {"TSLL": 800, "TSLA": 40}
     marks = {"TSLL": 8.50, "TSLA": 320.0}
     state = make_state(short=6800.0, long_=12800.0)
     d, proposal = propose(state, marks, held)
 
     leg = leg_by_ticker(proposal, "TSLA")
-    band_dollars = PARAMS.long_short_band * TARGET
-    net_at_limit = held["TSLA"] * leg["limit_exact"] - state.leverage * state.short_notional
+    off = orders.DEFAULT_MARKETABLE_OFFSET
     ok = (
         d.trigger == "long-short band"
         and leg["side"] == "BUY"
-        and abs(net_at_limit + band_dollars) < 1e-9
+        and proposal["style"] == orders.MARKETABLE
+        and leg["basis"].startswith("marketable")
+        and abs(leg["limit_exact"] - marks["TSLA"] * (1 + off)) < 1e-9
     )
-    return check("d. long-short (net delta -): boundary reproduces the band exactly",
-                 ok, f"trigger={d.trigger}, {leg['side']} limit_exact="
-                     f"{leg['limit_exact']:.6f}, net delta at limit "
-                     f"{net_at_limit:.6f} vs -band {-band_dollars:.6f}")
+    return check("d. long-short (net delta -): marketable buy through the mark, "
+                 "never a boundary limit",
+                 ok, f"trigger={d.trigger}, style={proposal['style']}, "
+                     f"{leg['side']} limit_exact={leg['limit_exact']:.6f} vs "
+                     f"mark {marks['TSLA']} (+{off * 1e4:.0f}bp), "
+                     f"basis={leg['basis']!r}")
 
 
 def _shares_from_trade_line(line):
@@ -352,11 +394,32 @@ def check_k():
                  text.splitlines()[2].strip())
 
 
+def check_l():
+    """The passive-rest invariant must itself still bite. Every proposal the
+    other checks build is swept by assert_passive_rests inside propose(); here
+    it is fed the exact old bug -- a leg labelled with a boundary basis whose
+    sell limit sits below the mark -- and required to trip."""
+    mislabelled = {"legs": [{
+        "ticker": "TSLA", "side": "SELL", "tradeable": True,
+        "basis": "long-short band boundary (10.0% of target)",
+        "limit_exact": 350.0,
+    }]}
+    try:
+        assert_passive_rests(mislabelled, {"TSLA": 360.0})
+        tripped = False
+        detail = "a crossing 'boundary' sell passed the assertion"
+    except AssertionError as exc:
+        tripped = True
+        detail = f"assertion tripped: {exc}"
+    return check("l. the permanent passive-rest assertion catches a "
+                 "mislabelled leg", tripped, detail)
+
+
 def main():
     results = [
         check_a(), check_b(), check_c(), check_d(), check_e(),
         check_f(), check_g(), check_h(), check_i(), check_j(),
-        check_k(),
+        check_k(), check_l(),
     ]
     print("=" * 60)
     if all(results):

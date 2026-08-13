@@ -12,13 +12,17 @@ this codebase that can actually be tested offline (scripts/verify_orders.py).
 
 Two order styles, chosen by what the trigger means:
 
-  Drift corrections (foil decay band, long-short band) price at the band
-  boundary -- the position was acceptable there by construction, so there is no
-  urgency, and a limit resting at the boundary trades only if price comes back
-  to us. Risk reductions (margin de-risk, drawdown stop) price MARKETABLY:
-  through the mark by a configurable offset, because the scenario where a
-  passive limit fails to fill is exactly the scenario a de-risk exists for. A
-  resting limit must never be the mechanism by which we de-risk.
+  A foil decay trip prices its short leg at the band boundary -- the position
+  was acceptable there by construction, there is no urgency, and the boundary
+  sits on the RESTING side of the mark in both directions (buying back a short
+  waits for a retrace down, shorting more for a retrace up), so the limit
+  trades only if price comes back to us. Everything else prices MARKETABLY,
+  through the mark by a configurable offset: risk reductions (margin de-risk,
+  drawdown stop) because the scenario where a passive limit fails to fill is
+  exactly the scenario a de-risk exists for -- a resting limit must never be
+  the mechanism by which we de-risk -- and the long-short trip's long leg
+  because its boundary always sits through the spread, so a limit there is a
+  market order wearing a passive label (see _long_leg_limit).
 
 This module changes a limit PRICE only. What the position is rebalanced TO is
 decision.py's output and is taken as given -- if pricing and sizing ever get
@@ -123,7 +127,11 @@ def build_proposal(state, d, params, marks, held_shares, pair,
 
     lev, und = pair["leveraged_ticker"], pair["underlying_ticker"]
     lev_mark, und_mark = marks.get(lev), marks.get(und)
-    style = MARKETABLE if d.trigger in _RISK_TRIGGERS else PASSIVE
+    # Only a foil decay trip has a leg that genuinely rests at a boundary; a
+    # long-short trip's single leg is priced marketably (see _long_leg_limit),
+    # so labelling the proposal "passive boundary" would misdescribe every
+    # order on it.
+    style = PASSIVE if d.trigger == "foil decay band" else MARKETABLE
 
     legs = []
 
@@ -140,8 +148,7 @@ def build_proposal(state, d, params, marks, held_shares, pair,
     if abs(long_delta) >= 0.005:
         side = _side(long_delta, short_leg=False)
         limit_exact, basis = _long_leg_limit(
-            d.trigger, state, params, und_mark, held_shares.get(und),
-            side, marketable_offset)
+            d.trigger, und_mark, side, marketable_offset)
         legs.append(_ticket(und, side, state.long_notional,
                             d.new_long_notional, und_mark, limit_exact, basis))
 
@@ -189,7 +196,7 @@ def _short_leg_limit(trigger, state, params, mark, held, side, offset):
     return None, "short leg does not trade on this trigger"
 
 
-def _long_leg_limit(trigger, state, params, mark, held, side, offset):
+def _long_leg_limit(trigger, mark, side, offset):
     """(exact limit, basis string) for the underlying leg."""
     if trigger in _RISK_TRIGGERS:
         return (_marketable(mark, side, offset),
@@ -197,21 +204,22 @@ def _long_leg_limit(trigger, state, params, mark, held, side, offset):
                 "(a resting limit must never be the de-risk mechanism)")
 
     if trigger == "long-short band":
-        # The band condition is on net_delta = long - leverage * short, which
-        # contains two prices. It is invertible only with one held fixed --
-        # and freezing the short at its current mark is exactly right, because
-        # this trip resizes the long leg only: the short is a constant of the
-        # rule itself, not an approximation.
-        if not held:
-            return None, "no share count available"
-        net_delta = state.long_notional - state.leverage * state.short_notional
-        sign = 1 if net_delta > 0 else -1
-        boundary = (state.leverage * state.short_notional
-                    + sign * params.long_short_band * state.target) / held
-        return (boundary,
-                f"long-short band boundary "
-                f"({params.long_short_band * 100:.1f}% of target, "
-                "short leg frozen at current mark)")
+        # NOT priced at the band boundary, and the reason is structural, not a
+        # tuning choice. The boundary is the long price at which net delta
+        # would sit exactly on the edge -- the price a RETRACE would reach to
+        # fix the drift without trading. But the corrective trade always
+        # points the same way as that retrace: long too big means selling with
+        # the boundary below the mark, long too small means buying with the
+        # boundary above it. A limit on the far side of the mark fills
+        # immediately -- a market order wearing a passive label, with its
+        # damage cap a full band-width away instead of a tight offset. The
+        # short leg is the mirror image (buying back a short waits for a
+        # retrace DOWN, so its boundary rests below the mark), which is why
+        # the foil decay boundary genuinely rests and this one never can.
+        # Hence the marketable path, honestly labelled.
+        return (_marketable(mark, side, offset),
+                f"marketable, {offset * 1e4:.0f}bp through the mark "
+                "(the long-short boundary always sits through the spread)")
 
     # Foil decay resets both legs, but the band condition carries no price for
     # the underlying, so there is no boundary to invert. Rest at the current
