@@ -31,6 +31,13 @@ DEFAULT_EVENT_LOG_DIR = os.path.join(
 CHECKS_FILE = "checks.jsonl"
 ALERTS_FILE = "alerts.jsonl"
 
+# Spec 008. Command traffic stays OUT of alerts.jsonl: that file answers "did
+# an alert get delivered", and filling it with /status replies destroys its
+# value. Orders get their own stream for the same reason -- every row in
+# orders.jsonl is a proposed trade, today always with status "placeholder".
+COMMANDS_FILE = "commands.jsonl"
+ORDERS_FILE = "orders.jsonl"
+
 
 def event_log_dir():
     return os.environ.get("EVENT_LOG_DIR") or DEFAULT_EVENT_LOG_DIR
@@ -67,3 +74,16 @@ def log_alert(record):
     """One line per send attempt, delivered or not."""
     record.setdefault("ts", now_iso())
     _append(ALERTS_FILE, record)
+
+
+def log_command(record):
+    """One line per inbound Telegram command, authorized or not."""
+    record.setdefault("ts", now_iso())
+    _append(COMMANDS_FILE, record)
+
+
+def log_order(record):
+    """One line per proposed ticket. Nothing in this repo submits orders; a
+    status other than "placeholder" here would be a bug, not a feature."""
+    record.setdefault("ts", now_iso())
+    _append(ORDERS_FILE, record)
