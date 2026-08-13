@@ -1,0 +1,49 @@
+[Unit]
+# The Telegram command poller. Answers /status, /positions, /account, /help
+# from files the monitor writes, and records button presses as intents for the
+# monitor to consume. It holds NO IBKR connection -- exactly one process does,
+# and it is the monitor -- which is why this unit orders after the network and
+# not after Gateway: the bot has nothing to say to Gateway, ever.
+Description=short-lev: telegram command bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=short-lev
+Group=short-lev
+WorkingDirectory=/opt/short_lev
+EnvironmentFile=/opt/short_lev/.env
+
+# Same interpreter arrangement as the monitor unit: the project is a uv
+# virtual root with flat imports, so PYTHONPATH stands in for an install.
+Environment=PYTHONPATH=/opt/short_lev/src
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/short_lev/.venv/bin/python /opt/short_lev/src/bot.py
+
+Restart=always
+RestartSec=10
+
+# Shares /var/lib/short-lev with the monitor: it reads runtime.json and the
+# event logs there, and appends intents.jsonl and its getUpdates offset.
+StateDirectory=short-lev
+
+# Full hardening, same block as the monitor: the bot writes only its state
+# files under /var/lib/short-lev.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/short-lev /opt/short_lev/.venv /home/short-lev/.local /home/short-lev/.cache
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

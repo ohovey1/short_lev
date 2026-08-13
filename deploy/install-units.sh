@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the four systemd units and seed the IBC config. Run ON THE BOX as
+# Install the systemd units and seed the IBC config. Run ON THE BOX as
 # root, from the repo root:
 #
 #     sudo deploy/install-units.sh
@@ -22,6 +22,7 @@ UNITS=(
     short-lev-gateway.service
     short-lev-vnc.service
     short-lev-monitor.service
+    short-lev-bot.service
 )
 
 if [[ $EUID -ne 0 ]]; then
@@ -91,6 +92,6 @@ cat <<EOF
 Then start the stack:
 
     sudo systemctl start short-lev-xvfb short-lev-gateway short-lev-vnc
-    sudo systemctl start short-lev-monitor
+    sudo systemctl start short-lev-monitor short-lev-bot
     journalctl -u short-lev-monitor -f
 EOF
