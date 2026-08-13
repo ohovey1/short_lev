@@ -44,14 +44,6 @@ git log --oneline "$before..$after"
 echo
 "$UV" sync
 
-# If the units changed, they need reinstalling -- daemon-reload alone will not
-# pick up a file that is still sitting in the repo.
-if ! git diff --quiet "$before" "$after" -- deploy/; then
-    echo
-    echo "NOTE: deploy/ changed. Reinstall the units before restarting:"
-    echo "    sudo $REPO/deploy/install-units.sh"
-fi
-
 cat <<EOF
 
 Synced ${before:0:7} -> ${after:0:7}. NOT restarted.
@@ -62,3 +54,13 @@ ideally outside market hours:
     sudo systemctl restart short-lev-monitor
     journalctl -u short-lev-monitor -f
 EOF
+
+# If the units changed, they need reinstalling -- daemon-reload alone will not
+# pick up a file that is still sitting in the repo. Printed LAST so it does not
+# scroll away above the closing block: a missed reinstall of a new unit ends in
+# "Unit could not be found" (2026-08-13, short-lev-bot).
+if ! git diff --quiet "$before" "$after" -- deploy/; then
+    echo
+    echo "NOTE: deploy/ changed. Reinstall the units before restarting:"
+    echo "    sudo $REPO/deploy/install-units.sh"
+fi
