@@ -1,10 +1,9 @@
 """Limit pricing for a tripped decision. Computes prices; submits NOTHING.
 
 The output is a proposal: a plain dict of per-leg tickets that gets rendered
-into a Telegram message and appended to orders.jsonl with status "placeholder".
-There is no order-submission code in this module or anywhere else in the repo,
-and Gateway stays in Read-Only API mode. Spec 008 section 8 lists what must be
-true before that changes; until then this file is arithmetic only.
+into a Telegram message and handed to execution.dispatch, which refuses,
+dry-runs, or (spec 009, every rail clear) submits it. This module itself
+submits nothing and stays arithmetic only -- the wire lives in execution.py.
 
 Pure on purpose: no I/O, no broker import, no dates, no Decision mutation. The
 arithmetic is the part that has to be right, and pure functions are the part of
@@ -37,8 +36,9 @@ each stays internally consistent at its own price.
 Known gap, recorded here deliberately: TIF is DAY and there is NO fill-or-
 escalate policy. An unfilled drift correction simply re-trips on the monitor's
 next cycle and re-alerts, which is tolerable; an unfilled de-risk is the
-liquidation scenario. A fill-or-escalate policy is REQUIRED before any of these
-tickets become live orders (spec 008 section 8).
+liquidation scenario. Spec 009 decided to ship WITHOUT that policy: the
+re-issue nudge (its section 7) is a bounded stand-in, marketable pricing on
+risk legs is the mitigation, and the unhedged timer is the alarm.
 """
 
 # Basis points through the mark for risk-reducing orders. A guess pending

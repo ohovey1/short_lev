@@ -1331,6 +1331,29 @@ def run():
     reconciled = reconcile_on_connect(ib, send, exec_state)
     execution_state.save(exec_state_path, exec_state)
     last_fill_count = -1
+
+    # One INFO per start: pair, target, connection, gate verdict -- the four
+    # facts a reader needs to trust (or distrust) everything that follows.
+    # Suppressed inside the window because Restart=always turns a crash loop
+    # into a message per crash; a suppressed start logs instead of sending.
+    startup_now = datetime.datetime.now(ET)
+    if alert_state.startup_due(alerts, startup_now):
+        port = int(os.environ.get("IB_PORT", 4002))
+        reconcile_note = ("clean" if reconciled else
+                          "NOT confirmed -- dispatch refused until a read "
+                          "succeeds")
+        send("INFO", "startup", f"{PAIR_KEY} -- monitor started",
+             f"target {target:,.2f} (from base_capital {base_capital:,.2f})\n"
+             f"connected: port {port} "
+             f"({'paper' if port == 4002 else 'LIVE'}), "
+             f"reconcile {reconcile_note}\n"
+             f"execution: {gate.mode} -- {gate.reason}")
+        alerts = alert_state.record_startup(alerts, startup_now)
+        alert_state.save(alert_path, alerts)
+    else:
+        log.info("startup alert suppressed -- one was sent within the last "
+                 "%g minutes (crash-loop guard); state unchanged",
+                 alert_state.STARTUP_SUPPRESS_MINUTES)
     checked_sanity = False
     was_connected = True
     checks_since_heartbeat = 0

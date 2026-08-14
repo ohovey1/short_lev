@@ -1,10 +1,9 @@
-"""The execution rails: everything that must refuse before anything is sent.
+"""The execution rails and the submit path: everything that must refuse
+before anything is sent, and the one function that sends.
 
-Spec 009 prep. There is NO order submission in this module or anywhere else in
-the repo. dispatch() is the executor path spec 009 will finish, and today even
-its fully-unlocked branch refuses -- the submit call gets added deliberately,
-in its own spec, never as a side effect of these rails existing. What exists
-now is every rail that is independent of submission:
+Spec 009. dispatch() is the executor path: clamp first, then the gate, and
+only the fully-unlocked live branch reaches _submit() -- the only code in the
+repo that touches the wire. Everything upstream of that line is a rail:
 
   - size_clamp: a pure function refusing any leg above a configurable
     multiple of target notional. A band rebalance moves a fraction of a
@@ -21,8 +20,8 @@ now is every rail that is independent of submission:
     submission until a human reconciles and deletes the flag file.
   - dry run: the executor path computes everything, logs the full ticket to
     orders.jsonl with status "dry_run", alerts as if it had submitted, and
-    submits nothing. The point is that the only untested line left is the
-    submit call itself.
+    submits nothing. The point is that the only line the dry-run day does not
+    rehearse is the submit call itself.
 
 Every default points at refusal: no env, no files, no configuration at all
 means nothing can ever be sent.
@@ -33,6 +32,8 @@ import json
 import logging
 import os
 from collections import namedtuple
+
+from ib_async import LimitOrder, Stock
 
 import events
 import orders
@@ -501,8 +502,144 @@ def _refuse(proposal, reason, extra):
     return "refused"
 
 
+def _watch(trade, ref, send, errors):
+    """Subscribe one trade's lifecycle. statusEvent, never a wait on
+    completion: ib_async parks a Read-Only or validation rejection (error
+    321 among others) in ValidationError, which it keeps in ActiveStates --
+    isDone() stays False forever and cancelledEvent never fires, so an
+    executor awaiting a done state hangs silently (execution-notes section
+    4). The handler treats ValidationError and Inactive as terminal:
+    one broker_refused row, one CRITICAL alert, exactly once.
+
+    It also records a permId that was not populated when placeOrder
+    returned -- that row is what lets tomorrow's reconcile match this order
+    at all, so its late arrival is logged rather than assumed.
+    """
+    done = {"refused": False, "perm_logged": bool(trade.order.permId)}
+
+    def on_status(t):
+        if t.order.permId and not done["perm_logged"]:
+            done["perm_logged"] = True
+            events.log_order({"status": "perm_id", "order_ref": ref,
+                              "perm_id": t.order.permId})
+            log.info("permId for %s arrived after submission: %s",
+                     ref, t.order.permId)
+        status = t.orderStatus.status
+        if is_terminal_refusal(status) and not done["refused"]:
+            done["refused"] = True
+            reason = (next((entry.message for entry in reversed(t.log)
+                            if getattr(entry, "message", "")), None)
+                      or errors.get(t.order.orderId) or status)
+            events.log_order({"status": "broker_refused", "order_ref": ref,
+                              "broker_status": status, "reason": reason})
+            log.critical("broker refused %s: %s (%s) -- terminal here, "
+                         "whatever ib_async thinks; nothing waits on a done "
+                         "state that never comes", ref, reason, status)
+            if send:
+                send("CRITICAL", "execution", f"order refused -- {ref}",
+                     f"The broker refused this order ({status}): {reason}\n"
+                     "Terminal: it will never fill and never cancel itself. "
+                     "Nothing is retried automatically.")
+
+    trade.statusEvent += on_status
+
+
+def _submit(ib, proposal, send, extra):
+    """Spec 009 section 3: the one function that touches the wire.
+
+    Called only from the live branch of dispatch, with every rail already
+    clear. Per tradeable leg, in one pass, back to back with no sleep
+    between them (section 5 -- sequencing the sends would not bound the
+    fill gap, detection does):
+
+      1. The orders.jsonl "submitted" row, BEFORE the wire call. A
+         submitted order absent from the ledger is invisible and
+         unreconcilable -- worse than a bad fill. A crash between this row
+         and placeOrder reconciles as "expired" (no order, no fill), a case
+         classify() already names.
+      2. placeOrder: LimitOrder, tif DAY, outsideRth False, orderRef
+         carrying the proposal id -- the ownership tag every later
+         reconcile matches on.
+
+    permId is recorded immediately when placeOrder returns it, else by the
+    first status callback (logged as arrived-late). All fill accounting
+    stays downstream in trade.fills / ib.fills(); nothing here counts
+    status callbacks -- they are documented as duplicable and droppable.
+    """
+    pid = (extra or {}).get("proposal_id")
+    if not pid:
+        return _refuse(proposal,
+                       "live submission requires a proposal_id -- the "
+                       "orderRef ownership tag cannot be built without it",
+                       extra)
+    if ib is None or not ib.isConnected():
+        return _refuse(proposal,
+                       "live submission with no connected broker handle",
+                       extra)
+    legs = [leg for leg in (proposal or {}).get("legs", [])
+            if leg.get("tradeable")]
+    if not legs:
+        return _refuse(proposal, "no tradeable legs on this proposal", extra)
+
+    # Broker error text per orderId, filled by on_error below. The trade's
+    # own log entry is the primary source for a refusal reason; this is the
+    # belt for the path where the error arrives without one.
+    errors = {}
+    trades = []
+    for leg in legs:
+        ref = order_ref(pid, leg["ticker"])
+        # The ledger write precedes the wire call -- non-negotiable.
+        events.log_order({**(extra or {}), "status": "submitted",
+                          "order_ref": ref, "perm_id": None,
+                          "trigger": proposal.get("trigger"),
+                          "style": proposal.get("style"),
+                          "marks": proposal.get("marks"), **leg})
+        contract = Stock(leg["ticker"], "SMART", "USD")
+        action = "BUY" if leg["side"].startswith("BUY") else "SELL"
+        order = LimitOrder(action, leg["shares"], leg["limit"], tif="DAY",
+                           orderRef=ref, outsideRth=False)
+        trade = ib.placeOrder(contract, order)
+        _watch(trade, ref, send, errors)
+        trades.append((ref, trade))
+
+    order_ids = {trade.order.orderId for _, trade in trades}
+
+    def on_error(*args):
+        # Signature-tolerant: errorEvent's arity has shifted across ib_async
+        # versions. reqId is always first; the message is the first str arg.
+        req_id = args[0] if args else None
+        if req_id not in order_ids:
+            return
+        text = next((a for a in args[1:] if isinstance(a, str)), "")
+        errors[req_id] = text or "broker error with no text"
+        log.error("broker error on order %s: %s", req_id, errors[req_id])
+
+    # Left attached for the session on purpose: it filters on this ticket's
+    # orderIds so it cannot double-handle, and the reconnect discards the IB
+    # object (and every subscription) anyway -- the reconcile spine, not
+    # events, is what survives a restart.
+    ib.errorEvent += on_error
+
+    for ref, trade in trades:
+        if trade.order.permId:
+            events.log_order({"status": "perm_id", "order_ref": ref,
+                              "perm_id": trade.order.permId})
+
+    lines = [f"{leg['side']} {leg['shares']:,d} {leg['ticker']} @ limit "
+             f"{leg['limit']:,.2f}  ref {order_ref(pid, leg['ticker'])}"
+             for leg in legs]
+    log.warning("SUBMITTED %d leg(s), proposal %s: %s",
+                len(legs), pid, "; ".join(lines))
+    if send:
+        send("WARNING", "execution",
+             f"SUBMITTED -- {len(legs)} leg(s), proposal {pid}",
+             "\n".join(lines) + "\n\ntif DAY: an unfilled leg expires at "
+             "the close and the band re-trips next cycle.")
+    return "submitted"
+
+
 def dispatch(proposal, target, send=None, extra=None, ib=None):
-    """The executor path. Today it can refuse or dry-run; it cannot submit.
+    """The executor path: refuse, dry-run, or submit.
 
     Clamp first, then the gate: an oversized ticket is refused in every mode,
     dry run included, because a dry run that pantomimes a ticket the clamp
@@ -510,10 +647,10 @@ def dispatch(proposal, target, send=None, extra=None, ib=None):
 
     send is the monitor's alert closure (severity, kind, title, body) -- this
     module owns no Telegram credentials. extra rides into the orders.jsonl
-    row (proposal ids, who confirmed). ib is the broker handle the live
-    branch will need once spec 009's submit call lands there; every other
-    branch ignores it. Returns the status string written to orders.jsonl:
-    "refused" or "dry_run".
+    rows (proposal id, decision id, source). ib is the broker handle the
+    live branch hands to _submit; every other branch ignores it. Returns the
+    status string written to orders.jsonl: "refused", "dry_run", or
+    "submitted".
     """
     allow, reason = size_clamp(proposal, target, max_order_multiple())
     if not allow:
@@ -536,11 +673,6 @@ def dispatch(proposal, target, send=None, extra=None, ib=None):
                  orders.format_proposal(proposal))
         return "dry_run"
 
-    # gate.mode == "live": every rail is clear, and this is the line where
-    # spec 009's submit call goes. Until that spec lands, the honest behavior
-    # is a loud refusal -- a quiet success here would mean an operator armed
-    # a build with no executor and believed an order went out.
-    log.critical("live submission requested but not implemented -- the "
-                 "submit call is spec 009; refusing")
-    return _refuse(proposal, "live submission not implemented (spec 009)",
-                   extra)
+    # gate.mode == "live": every rail is clear. This is the one line in the
+    # repo where an order reaches the wire (spec 009 section 3).
+    return _submit(ib, proposal, send, extra)

@@ -279,4 +279,56 @@ Offline unless marked live.
 
 ## Result
 
-<!-- Filled in after the session. -->
+**Session of 2026-08-14 (the submit path, section 3).** Prior sessions shipped
+the rails, the reconcile spine, fill accounting, and the unhedged timer; this
+session replaced the CRITICAL refusal in dispatch's live branch with
+`execution._submit` -- per tradeable leg: the orders.jsonl "submitted" row
+written BEFORE the wire call, then `placeOrder` with a DAY limit,
+`outsideRth=False`, and `orderRef shortlev:<proposal_id>:<ticker>`. Both legs
+go in one pass, back to back, no sleep (section 5 as decided). `statusEvent`
+and `errorEvent` are subscribed at submission; ValidationError/Inactive are
+terminal refusals (broker_refused row + CRITICAL alert, never a wait on a
+done state); a permId absent at placeOrder-return is recorded from the first
+status callback and logged as late. The live branch grew two guards of its
+own: no proposal_id and no connected handle both refuse. Also added: a deduped
+startup alert (one INFO per start -- pair, target, connection, gate verdict --
+suppressed 15 minutes as a crash-loop guard).
+
+**Section 1 was skipped by deliberate decision, not met.** The probe was not
+run; all three open questions in `docs/execution-notes.md` remain UNANSWERED
+and are recorded there as deferred. Question 2 (is orderRef echoed across
+clientIds?) will be answered by the first real fill instead -- the classifier's
+permId fallback already tolerates the pessimistic outcome. Gate 1 is therefore
+not passed and will not be; treat the reconnaissance answers as provisional
+until paper observation contradicts or confirms them.
+
+**Gate status (offline items, all passing in `scripts/verify_execution.py`
+and `scripts/verify_monitor.py`):**
+
+- Gate 2 (ValidationError terminal): checks p and v. v drives the actual
+  submit path with a synthetic 321 sequence; nothing in src waits on a done
+  state or filledEvent (source-scanned).
+- Gate 3 (six-case classify): check q. Gate 4 (filled-not-in-ledger blocks):
+  check r. Gate 7 (unhedged timer): check s. Gate 8 (fills-derived
+  accounting): check t. Gate 9 (failed query refuses cycle, no flag):
+  checks o and u.
+- Gate 5 (ledger write precedes the wire): check l, asserted on the code path
+  -- the stub broker reads the ledger at placeOrder time.
+- Gate 6 (orderRef on every order, carrying the proposal id): check l, on
+  both the ledger row and the wire order.
+- Gate 10 (four rails default off): checks e-i. Gate 11 (clamp refuses in dry
+  run): check k.
+
+**Still open, live-only:** gates 12 (HALT mid-session), 13 (full dry-run day
+across a Gateway restart), 14 (first armed submission). The arming ladder in
+section 8 is untouched: Read-Only stays on both places until step 3, DRY_RUN
+stays 1 until step 4.
+
+**Deviations from the spec text:** none in behavior; two interpretations worth
+recording. The "submitted" ledger record is one row per tradeable leg (the
+shape `fold_ledger` folds), not an additional proposal-level row. And the live
+path sends a WARNING "SUBMITTED" alert mirroring the dry-run's as-if alert,
+so the message flow stays rehearsed and step 4's "watch the first submission"
+has something to watch. Contracts are `Stock(ticker, "SMART", "USD")` with no
+qualifyContracts round-trip -- a bad symbol surfaces through the
+ValidationError path, which is handled and tested.

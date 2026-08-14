@@ -1,10 +1,12 @@
-"""Verify the execution rails offline. Run from the project root:
+"""Verify the execution rails and the submit path offline. Run from the
+project root:
 
     .venv/Scripts/python.exe scripts/verify_execution.py
 
-Spec 009 prep: everything here refuses, and these checks prove it refuses for
-the right reasons in the right order. No market, no Gateway, no Telegram --
-the rails are exactly the part of an executor that must be testable offline.
+Spec 009: the rails must refuse for the right reasons in the right order, and
+the live branch must write the ledger before it touches the wire. No market,
+no Gateway, no Telegram -- placeOrder lands on a stub that returns real
+ib_async Trade objects, so the submit path runs for real up to the socket.
 
 Checks:
   a. The clamp allows a normal drift-correction ticket.
@@ -22,9 +24,13 @@ Checks:
      alerts as if it had submitted.
   k. A clamp refusal writes status "refused" with the reason in the row and
      one WARNING log line -- the reason is logged on every refusal.
-  l. A fully-unlocked dispatch still refuses: the submit call is spec 009's,
-     and until it lands the live branch logs CRITICAL and refuses.
-  m. No placeOrder anywhere in src/, execution.py and broker.py included.
+  l. A fully-unlocked dispatch submits (gates 5 and 6): one "submitted" row
+     per tradeable leg, each written BEFORE its placeOrder call (asserted on
+     the code path -- the stub reads the ledger at call time), orderRef
+     carries the proposal id on the row and on the wire order, tif DAY,
+     outsideRth False, sides mapped to BUY/SELL, and a SUBMITTED alert.
+  m. placeOrder appears in execution.py and NOWHERE else in src/ -- the
+     submit path has exactly one home.
   n. /status renders the execution line from runtime.json, and says
      "not reported" when a pre-rails monitor wrote the file.
   o. reconcile_on_connect flags and alerts on a confirmed orphan order, and
@@ -46,6 +52,12 @@ Checks:
   u. predispatch_orders refuses the cycle on a failed query with NO flag,
      waits on our own working order, flags a foreign one, and passes a
      clean book (gate 9).
+  v. ValidationError on a submitted trade is terminal ON THE SUBMIT PATH
+     (gate 2): one broker_refused row carrying the broker's error text, one
+     CRITICAL alert, exactly once even when the status fires twice; a permId
+     arriving only on the callback is recorded and logged as late.
+  w. The live branch's own guards refuse loudly: no proposal_id in extra,
+     and a missing or disconnected ib handle, each write a "refused" row.
 """
 
 import datetime
@@ -55,6 +67,10 @@ import os
 import sys
 import tempfile
 from zoneinfo import ZoneInfo
+
+from eventkit import Event
+from ib_async import Trade
+from ib_async.order import TradeLogEntry
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -162,6 +178,38 @@ def read_orders(tmp):
             return [json.loads(line) for line in f if line.strip()]
     except OSError:
         return []
+
+
+class _StubIB:
+    """Offline stand-in for the broker handle. placeOrder returns a REAL
+    ib_async Trade -- so the submit path's event subscriptions run against
+    the genuine objects -- and records whether the "submitted" ledger row
+    already existed at call time. That is the write-before-wire assertion
+    made on the code path itself, not inferred from end state (gate 5)."""
+
+    def __init__(self, tmp):
+        self.tmp = tmp
+        self.trades = []
+        self.row_preceded = []
+        self.errorEvent = Event("errorEvent")
+
+    def isConnected(self):
+        return True
+
+    def placeOrder(self, contract, order):
+        rows = read_orders(self.tmp)
+        self.row_preceded.append(any(
+            r.get("status") == "submitted"
+            and r.get("order_ref") == order.orderRef for r in rows))
+        order.orderId = len(self.trades) + 1
+        trade = Trade(contract=contract, order=order)
+        self.trades.append(trade)
+        return trade
+
+
+class _DeadIB:
+    def isConnected(self):
+        return False
 
 
 def check_a():
@@ -320,27 +368,43 @@ def check_k():
 
 
 def check_l():
-    capture = _Capture()
-    execution.log.addHandler(capture)
-    try:
-        with tempfile.TemporaryDirectory() as tmp, \
-                _rails_env(tmp, DRY_RUN="0", EXECUTION_ENABLED="1"):
-            status = execution.dispatch(drift_proposal(), TARGET)
-            rows = read_orders(tmp)
-    finally:
-        execution.log.removeHandler(capture)
-    criticals = [r for r in capture.records if r.levelno == logging.CRITICAL]
+    """Gates 5 and 6, asserted on the code path: the stub records at
+    placeOrder time whether that leg's submitted row was already in the
+    ledger, so a reordering of write and wire fails here even if the end
+    state looks identical."""
+    sent = []
+    with tempfile.TemporaryDirectory() as tmp, \
+            _rails_env(tmp, DRY_RUN="0", EXECUTION_ENABLED="1"):
+        stub = _StubIB(tmp)
+        status = execution.dispatch(
+            drift_proposal(), TARGET,
+            send=lambda *a: sent.append(a),
+            extra={"proposal_id": "p-live", "source": "check_l"},
+            ib=stub)
+        rows = read_orders(tmp)
+    tradeable = [leg for leg in drift_proposal()["legs"] if leg["tradeable"]]
+    submitted = [r for r in rows if r.get("status") == "submitted"]
+    refs_ok = all(r["order_ref"] == f"shortlev:p-live:{r['ticker']}"
+                  and r["proposal_id"] == "p-live" for r in submitted)
+    wire_ok = all(
+        t.order.orderRef == execution.order_ref("p-live", t.contract.symbol)
+        and t.order.tif == "DAY" and t.order.outsideRth is False
+        and t.order.action in ("BUY", "SELL")
+        for t in stub.trades)
+    alerts = [a for a in sent if "SUBMITTED" in a[2]]
     ok = (
-        status == "refused" and len(rows) == 1
-        and rows[0]["status"] == "refused"
-        and "spec 009" in rows[0]["reason"]
-        and len(criticals) == 1
+        status == "submitted"
+        and len(submitted) == len(tradeable) == len(stub.trades) >= 1
+        and stub.row_preceded and all(stub.row_preceded)
+        and refs_ok and wire_ok
+        and len(alerts) == 1 and alerts[0][0] == "WARNING"
     )
-    return check("l. a fully-unlocked dispatch still refuses: the submit "
-                 "call is spec 009's",
-                 ok, f"status={status}, reason="
-                     f"{rows[0].get('reason') if rows else 'none'!r}, "
-                     f"CRITICAL lines={len(criticals)}")
+    return check("l. a fully-unlocked dispatch submits: ledger row precedes "
+                 "each placeOrder, orderRef carries the proposal id",
+                 ok, f"status={status}, submitted rows={len(submitted)} for "
+                     f"{len(tradeable)} tradeable leg(s), row preceded wire="
+                     f"{stub.row_preceded}, refs ok={refs_ok}, wire ok="
+                     f"{wire_ok}, SUBMITTED alerts={len(alerts)}")
 
 
 def check_m():
@@ -352,8 +416,9 @@ def check_m():
         with open(os.path.join(src_dir, name), encoding="utf-8") as f:
             if "placeOrder" in f.read():
                 hits.append(name)
-    ok = not hits
-    return check("m. no placeOrder anywhere in src/",
+    ok = hits == ["execution.py"]
+    return check("m. placeOrder lives in execution.py and nowhere else "
+                 "in src/",
                  ok, f"hits: {hits or 'none'}")
 
 
@@ -687,19 +752,113 @@ def check_u():
                      f"{len(sent)}), clean=({c_ok}, flag={c_flag})")
 
 
+def check_v():
+    """Gate 2 on the submit path itself: a synthetic ValidationError (the
+    Read-Only rejection ib_async classifies as a warning and parks in an
+    ACTIVE state) must terminate with one broker_refused row and one
+    CRITICAL alert -- even fired twice, because status callbacks are
+    documented as duplicable -- and a permId arriving only on the callback
+    must be recorded and logged as late."""
+    sent = []
+    capture = _Capture()
+    execution.log.addHandler(capture)
+    # The arrived-late line is INFO; the root logger's WARNING default would
+    # drop it before the capture handler ever sees it.
+    prior_level = execution.log.level
+    execution.log.setLevel(logging.INFO)
+    try:
+        with tempfile.TemporaryDirectory() as tmp, \
+                _rails_env(tmp, DRY_RUN="0", EXECUTION_ENABLED="1"):
+            stub = _StubIB(tmp)
+            status = execution.dispatch(
+                drift_proposal(), TARGET,
+                send=lambda *a: sent.append(a),
+                extra={"proposal_id": "p-val"}, ib=stub)
+            trade = stub.trades[0]
+            # The broker's sequence for error 321: errorEvent with the text,
+            # a log entry, the status parked in ValidationError, statusEvent.
+            stub.errorEvent.emit(
+                trade.order.orderId, 321,
+                "Error validating request. The API interface is currently "
+                "in Read-Only mode.", None)
+            trade.log.append(TradeLogEntry(
+                time=datetime.datetime.now(datetime.timezone.utc),
+                status="ValidationError",
+                message="Error 321: The API interface is currently in "
+                        "Read-Only mode.", errorCode=321))
+            trade.orderStatus.status = "ValidationError"
+            trade.order.permId = 654321
+            trade.statusEvent.emit(trade)
+            trade.statusEvent.emit(trade)  # documented duplicate callback
+            rows = read_orders(tmp)
+    finally:
+        execution.log.removeHandler(capture)
+        execution.log.setLevel(prior_level)
+    refused = [r for r in rows if r.get("status") == "broker_refused"]
+    perm = [r for r in rows if r.get("status") == "perm_id"]
+    late = [r for r in capture.records
+            if "arrived after submission" in r.getMessage()]
+    criticals = [r for r in capture.records if r.levelno == logging.CRITICAL]
+    crit_alerts = [a for a in sent if a[0] == "CRITICAL"]
+    ok = (
+        status == "submitted"
+        and len(refused) == 1 and "321" in refused[0]["reason"]
+        and refused[0]["broker_status"] == "ValidationError"
+        and len(criticals) == 1 and len(crit_alerts) == 1
+        and len(perm) == 1 and perm[0]["perm_id"] == 654321
+        and len(late) == 1
+    )
+    return check("v. ValidationError on the submit path is terminal: one "
+                 "broker_refused row, one CRITICAL, late permId recorded",
+                 ok, f"refused rows={len(refused)} (reason="
+                     f"{refused[0].get('reason') if refused else 'none'!r}), "
+                     f"CRITICAL log/alert={len(criticals)}/{len(crit_alerts)}, "
+                     f"perm rows={len(perm)}, late lines={len(late)}")
+
+
+def check_w():
+    """The live branch's own guards: without a proposal_id the orderRef
+    ownership tag cannot exist, and without a connected handle nothing can
+    be sent -- both refuse loudly, neither writes a submitted row."""
+    with tempfile.TemporaryDirectory() as tmp, \
+            _rails_env(tmp, DRY_RUN="0", EXECUTION_ENABLED="1"):
+        no_pid = execution.dispatch(drift_proposal(), TARGET,
+                                    extra={"source": "check_w"},
+                                    ib=_StubIB(tmp))
+        no_ib = execution.dispatch(drift_proposal(), TARGET,
+                                   extra={"proposal_id": "p-w1"}, ib=None)
+        dead = execution.dispatch(drift_proposal(), TARGET,
+                                  extra={"proposal_id": "p-w2"}, ib=_DeadIB())
+        rows = read_orders(tmp)
+    refused = [r for r in rows if r.get("status") == "refused"]
+    ok = (
+        no_pid == "refused" and no_ib == "refused" and dead == "refused"
+        and len(refused) == 3
+        and sum("proposal_id" in r["reason"] for r in refused) == 1
+        and sum("broker handle" in r["reason"] for r in refused) == 2
+        and not any(r.get("status") == "submitted" for r in rows)
+    )
+    return check("w. live-branch guards: no proposal_id and no connected "
+                 "handle both refuse, nothing submitted",
+                 ok, f"verdicts={no_pid}/{no_ib}/{dead}, refused rows="
+                     f"{len(refused)}, reasons="
+                     f"{[r['reason'][:40] for r in refused]}")
+
+
 def main():
     results = [
         check_a(), check_b(), check_c(), check_d(), check_e(),
         check_f(), check_g(), check_h(), check_i(), check_j(),
         check_k(), check_l(), check_m(), check_n(), check_o(),
         check_p(), check_q(), check_r(), check_s(), check_t(),
-        check_u(),
+        check_u(), check_v(), check_w(),
     ]
     print("=" * 60)
     if all(results):
-        print("All execution-rail offline checks PASSED.")
-        print("Nothing here submits. The live branch of dispatch() refuses "
-              "until spec 009 deliberately adds the submit call.")
+        print("All execution offline checks PASSED.")
+        print("The submit path lives in execution._submit, reached only "
+              "through dispatch with every rail clear; a clean environment "
+              "still dry-runs and submits nothing.")
     else:
         print("Some checks FAILED -- see above.")
         sys.exit(1)

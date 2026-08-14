@@ -226,6 +226,13 @@ exactly as proposed (it does).
 
 ## Open questions for the paper account (cheap, single-session)
 
+**Deferred 2026-08-14, not answered.** The probe was skipped when the submit
+path shipped (spec 009 Result); none of the three below is verified. Question
+2's answer will come from the first real fill's open-order and fill rows
+rather than from a dedicated session; the reconcile's permId fallback already
+covers the pessimistic case. Do not read anything in this section as
+confirmed on paper.
+
 1. Does `reqAllOpenOrders()` answer normally on a `readonly=True` connection
    with Gateway's Read-Only API enabled? (Expected yes -- it is a read.)
 2. Is `orderRef` echoed on open-order rows queried from a different clientId

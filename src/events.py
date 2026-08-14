@@ -95,7 +95,9 @@ def log_order(record):
     unreconcilable, the worst state the system has), "fill" (one row per
     execution, exec_id is the dedup key), "filled", "expired", "cancelled",
     "broker_refused" (ValidationError/Inactive -- terminal here whatever
-    ib_async thinks). "foreign_fill" records an execution that is NOT ours so
-    the same orphan event is not re-flagged on every reconnect."""
+    ib_async thinks), "perm_id" (carries a permId the broker did not populate
+    at submission; fold_ledger sticks it onto the leg). "foreign_fill" records
+    an execution that is NOT ours so the same orphan event is not re-flagged
+    on every reconnect."""
     record.setdefault("ts", now_iso())
     _append(ORDERS_FILE, record)

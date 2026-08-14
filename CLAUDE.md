@@ -65,7 +65,7 @@ or treat its output as a live-trading projection.
 - **Both `band.py` and `backtest.py` MUST call the engine. Never reimplement P&L math in either.** (A prior project's backtest diverged from its live engine. Don't repeat it.)
 - The engine stays pure: no I/O, no global state, no date awareness beyond the prices passed in.
 - **The band trip conditions live only in `decision.evaluate()`. Never reimplement them.** `band.py` owns iteration and accounting; `monitor.py` calls the same function against a live account. Same reasoning as the engine constraint above: one definition, two callers. `decision.py` is pure -- no I/O, no dates, no bars.
-- **`monitor.py` reads and never trades.** No order submission anywhere in the repo, not behind a flag. It also never persists `target` (always derived) and never applies the de-risk ratchet -- moving the reference for a trade that never happened corrupts every later band reading.
+- **`monitor.py` reads and never trades.** Order submission lives ONLY in `execution.dispatch` (spec 009), behind the four default-off rails; no other module touches the wire. monitor.py also never persists `target` (always derived) and never applies the de-risk ratchet -- moving the reference for a trade that never happened corrupts every later band reading.
 - Borrow cost is real, not a stub -- both `band.py` and `backtest.py` must keep charging it.
 
 ## Pairing

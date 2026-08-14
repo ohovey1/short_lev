@@ -5,6 +5,41 @@ archive the rest to `docs/history/` (see `docs/history/scratchpad-2026-06.md`).
 
 ---
 
+### 2026-08-14 (spec 009 section 3: the submit path)
+
+**Spec:** `specs/spec_009.md`
+
+**Shipped:**
+- `execution._submit`: the one wire-touching function in the repo, reached only
+  through dispatch's live branch. Per tradeable leg: ledger row BEFORE
+  placeOrder, DAY limit, outsideRth False, orderRef `shortlev:<pid>:<ticker>`;
+  both legs back to back, no sleep. statusEvent/errorEvent subscribed;
+  ValidationError/Inactive terminal (broker_refused + CRITICAL); late permId
+  recorded from the first callback and logged as late. Guards: no proposal_id
+  and no connected handle both refuse.
+- Deduped startup alert: one INFO per start (pair, target, connection, gate
+  verdict), suppressed 15 min via `alert_state.startup_due` -- the crash-loop
+  guard Restart=always makes necessary.
+- verify_execution grew v/w and flipped l/m (fully-unlocked now submits to a
+  stub that asserts write-before-wire ON the code path; placeOrder allowed in
+  execution.py only). All 23 execution + 23 monitor offline checks pass.
+- Truth maintenance: execution/broker/orders headers and the CLAUDE.md hard
+  constraint now say submission exists, in exactly one place.
+
+**Surprised us:**
+- Nothing structural. The one test failure during the session was the capture
+  handler missing an INFO line because the root logger's WARNING level filters
+  records before handlers see them -- worth remembering for future _Capture use.
+
+**Next:**
+- Section 1 skipped deliberately: three open questions DEFERRED, recorded in
+  execution-notes; question 2 answered by the first real fill.
+- The arming ladder (section 8) from step 1: dry-run day on Read-Only, review
+  orders.jsonl vs alerts across a nightly restart, then Read-Only off, then arm
+  with MAX_ORDER_MULTIPLE reduced.
+
+---
+
 ### 2026-08-10 (spec 005: margin model -- fixed the rate and the shape)
 
 **Spec:** `specs/spec_005.md`

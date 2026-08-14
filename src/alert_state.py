@@ -37,11 +37,17 @@ ET = ZoneInfo("America/New_York")
 # 15-minute poll interval, so a normal cycle always lands inside it.
 HEARTBEAT_WINDOW_MINUTES = 30
 
+# How long after one startup alert the next is suppressed. Restart=always
+# makes a crash loop possible, and a crash loop that alerts on every start
+# spams the group into muting it -- suppressed starts log instead of sending.
+STARTUP_SUPPRESS_MINUTES = 15
+
 DEFAULT_ALERT_STATE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "data", "state", "alert_state.json"
 )
 
-EMPTY = {"last_trigger": None, "last_sent_ts": None, "last_heartbeat_date": None}
+EMPTY = {"last_trigger": None, "last_sent_ts": None,
+         "last_heartbeat_date": None, "last_startup_ts": None}
 
 
 def state_path():
@@ -171,4 +177,24 @@ def heartbeat_due(state, now, hour, minute, window_minutes=HEARTBEAT_WINDOW_MINU
 def record_heartbeat(state, now):
     updated = dict(state)
     updated["last_heartbeat_date"] = now.date().isoformat()
+    return updated
+
+
+def startup_due(state, now, suppress_minutes=STARTUP_SUPPRESS_MINUTES):
+    """True unless a startup alert was sent within the suppression window.
+
+    Pure, same shape as should_send. An unreadable timestamp counts as due --
+    the cost of a wrong answer here is one extra or one suppressed message,
+    and "monitor started" is the message an operator most wants after an
+    unexpected restart, so err toward sending.
+    """
+    last = _match_awareness(_parse(state.get("last_startup_ts")), now)
+    if last is None:
+        return True
+    return (now - last).total_seconds() >= suppress_minutes * 60
+
+
+def record_startup(state, now):
+    updated = dict(state)
+    updated["last_startup_ts"] = now.isoformat(timespec="seconds")
     return updated

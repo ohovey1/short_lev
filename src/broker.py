@@ -1,14 +1,16 @@
 """IBKR reads. Connect, read one pair's position, hand back a PositionState.
 
 No decisions, no loop, no file I/O -- that is monitor.py's job. This module is
-the seam between the broker and the pure decision layer, and it is deliberately
-the only place that knows ib_async exists.
+the seam between the broker and the pure decision layer. It shares knowledge
+of ib_async with exactly one other module: execution.py, the submit-side seam
+(spec 009), where every wire-touching line lives.
 
-Everything here is READ-only. There is no order-submission code in this module
-or anywhere else in the repo, and spec 004 puts it out of scope explicitly --
-not behind a flag, not "just the code path". IB Gateway should additionally run
-with Read-Only API enabled so that is a property of the broker and not a promise
-in a docstring.
+Everything HERE is READ-only. Order submission exists only in
+execution._submit, reached solely through dispatch's four default-off rails.
+Until the arming steps of spec 009 section 8 are taken, IB Gateway runs with
+Read-Only API enabled and connect() passes readonly=True, so a submission is
+rejected at the wire -- a property of the broker, not a promise in a
+docstring.
 
 The governing bias is fail loudly over guess. Every path that could hand back a
 plausible-looking but wrong number logs and returns None instead. The specific

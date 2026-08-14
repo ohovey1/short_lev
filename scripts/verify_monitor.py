@@ -45,6 +45,11 @@ Spec 008 adds:
      an unwritable path, and reads None (not an exception) when malformed.
   u. The confirm expiry (gate 15's arithmetic): valid inside 60 seconds,
      refused past it, and an unreadable timestamp refuses rather than allows.
+
+Spec 009 adds:
+  v. The startup alert dedup: due with no prior record, suppressed inside the
+     15-minute window (the crash-loop guard), due again past it, and a naive
+     stored timestamp does not raise against an aware now.
 """
 
 import datetime
@@ -721,13 +726,40 @@ def check_u():
                      f"unreadable={unreadable} absent={absent}")
 
 
+def check_v():
+    """Spec 009: one startup alert per start, except in a crash loop --
+    Restart=always would otherwise turn every crash into a message."""
+    et = monitor.ET
+    now = datetime.datetime(2026, 8, 14, 9, 30, tzinfo=et)
+    fresh = alert_state.startup_due(dict(alert_state.EMPTY), now)
+    recorded = alert_state.record_startup(dict(alert_state.EMPTY), now)
+    inside = alert_state.startup_due(
+        recorded, now + datetime.timedelta(minutes=14, seconds=59))
+    at_edge = alert_state.startup_due(
+        recorded, now + datetime.timedelta(minutes=15))
+    naive = dict(recorded,
+                 last_startup_ts=now.replace(tzinfo=None).isoformat(
+                     timespec="seconds"))
+    try:
+        naive_ok = alert_state.startup_due(
+            naive, now + datetime.timedelta(minutes=5)) is False
+    except TypeError:
+        naive_ok = False
+    ok = (fresh is True and inside is False and at_edge is True and naive_ok
+          and recorded["last_startup_ts"] == now.isoformat(timespec="seconds"))
+    return check("v. startup dedup: due when fresh, suppressed inside 15 "
+                 "min, due at the edge, naive ts safe",
+                 ok, f"fresh={fresh}, 14m59s={inside}, 15m={at_edge}, "
+                     f"naive suppressed without raising={naive_ok}")
+
+
 def main():
     results = [
         check_a(), check_b(), check_c(), check_d(), check_e(),
         check_f(), check_g(), check_h(), check_i(), check_j(),
         check_k(), check_l(), check_m(), check_n(), check_n2(),
         check_o(), check_p(), check_q(), check_r(), check_s(),
-        check_t(), check_u(),
+        check_t(), check_u(), check_v(),
     ]
     print("=" * 60)
     if all(results):
