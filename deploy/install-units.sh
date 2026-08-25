@@ -23,6 +23,7 @@ UNITS=(
     short-lev-vnc.service
     short-lev-monitor.service
     short-lev-bot.service
+    short-lev-basic-bot.service
 )
 
 if [[ $EUID -ne 0 ]]; then
