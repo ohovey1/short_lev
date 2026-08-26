@@ -65,7 +65,13 @@ def _rates_for(short_ticker, leverage):
 def _price(ib, ticker):
     """Attempts to fetch a live price, or returns None."""
     contract = Stock(ticker, "SMART", "USD")
-    [snap] = ib.reqTickers(contract)
+    [qualified] = ib.qualifyContracts(contract)
+    if qualified.conId == 0:
+        # qualifyContracts leaves conId at 0, rather than raising, when IBKR
+        # doesn't recognize the symbol -- e.g. a typo. Treat it the same as
+        # "no price" so the caller's existing missing-symbol message covers it.
+        return None
+    [snap] = ib.reqTickers(qualified)
     price = snap.marketPrice()
     if price is None or price != price:  # NaN check
         return None
