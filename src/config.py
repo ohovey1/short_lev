@@ -80,6 +80,9 @@ PAIRS = {
     "NVDL": {"leveraged_ticker": "NVDL", "underlying_ticker": "NVDA", "leverage": 2, "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
     "TSLL": {"leveraged_ticker": "TSLL", "underlying_ticker": "TSLA", "leverage": 2, "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
     "CONL": {"leveraged_ticker": "CONL", "underlying_ticker": "COIN", "leverage": 2, "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
+    "TSLT": {"leveraged_ticker": "TSLT", "underlying_ticker": "TSLA", "leverage": 2, "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
+    "AGQ": {"leveraged_ticker": "AGQ", "underlying_ticker": "SLV", "leverage": 2, "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
+    "SHNY": {"leveraged_ticker": "SHNY", "underlying_ticker": "GLD", "leverage": 3, "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.90},
 }
 
 

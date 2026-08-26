@@ -105,9 +105,11 @@ result = run_all_pairs()
 result.to_csv('grid_search_results.csv', header=True, index=True)
 print(result)
 
-"""
+
 tslt_df = result[result["Pair"] == "TSLT / TSLA"].reset_index(drop=True)
 tsll_df = result[result["Pair"] == "TSLL / TSLA"].reset_index(drop=True)
 
 res_trades = tslt_df["Trades"] < tsll_df["Trades"]
-"""
+
+tslt_describe = tslt_df['Trades'].describe()
+tsll_describe = tsll_df['Trades'].describe()

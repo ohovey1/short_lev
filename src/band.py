@@ -93,6 +93,8 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
 
     lev = data.get_prices(pair["leveraged_ticker"])
     und = data.get_prices(pair["underlying_ticker"])
+    und_divs = data.get_dividends(pair["underlying_ticker"])   # cash_amount per ex-date
+    lev_divs = data.get_dividends(pair["leveraged_ticker"])
     dates = lev.index.intersection(und.index).sort_values()
     if lookback_days is not None:
         dates = dates[-lookback_days:]
@@ -112,6 +114,8 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
 
     realized = 0.0
     borrow_paid = 0.0
+    div_received = 0.0   # dividends earned on the long leg (underlying)
+    div_paid = 0.0        # dividends owed on the short leg (LETF), like a borrow fee
     notional_days = 0.0
     turnover_lev = 0.0   # gross $ traded on the LETF leg
     turnover_und = 0.0   # gross $ traded on the underlying leg
@@ -158,7 +162,8 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
         # `realized` without changing the total, so peeking here cannot perturb
         # any existing number.
         mark = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
-        account_equity = base_capital + realized + mark["net"] - borrow_paid
+        account_equity = base_capital + realized + mark["net"] - borrow_paid + div_received - div_paid
+
 
         # --- 2-4. Decide ----------------------------------------------------
         # The trip conditions live in decision.evaluate(); this loop re-derives
@@ -228,9 +233,17 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
         # so the day is charged on the size actually carried out of it.
         borrow_paid += engine.borrow_cost(short_notional, borrow_rate_annual)
         notional_days += short_notional
+        
+        # --- 5b. Dividends on the POST-action notional, same timing as borrow ------
+        if date in und_divs.index:
+            # long leg: yield = cash_amount / price on ex-date, applied to notional
+            div_received += long_notional * (und_divs.loc[date, "cash_amount"] / und_now)
+        if date in lev_divs.index:
+            # short leg: same mechanics as borrow_cost -- a liability, not a mark
+            div_paid += short_notional * (lev_divs.loc[date, "cash_amount"] / lev_now)
 
         r = engine.position_pnl(lev_e, lev_now, und_e, und_now, short_size, long_size)
-        equity.append(realized + r["net"] - borrow_paid)
+        equity.append(realized + r["net"] - borrow_paid + div_received - div_paid)
 
         # Both legs, post-action: a trip above rewrote short_notional AND
         # long_notional, so this charges the day on the sizes actually carried
@@ -260,7 +273,9 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
         "trades": pd.DataFrame(trades),  # final still-open segment not included
         "turnover_lev": turnover_lev,
         "turnover_und": turnover_und,
-        "breakeven_borrow": engine.breakeven_borrow_rate(total_return + borrow_paid, notional_days),
+        "breakeven_borrow": engine.breakeven_borrow_rate(
+            total_return + borrow_paid - (div_received - div_paid), notional_days
+        ),
         "margin_cushion": margin_cushion_series,
         "min_margin_cushion": margin_cushion_series.min(),
         "margin_breached": bool(margin_cushion_series.min() < 0),
@@ -274,4 +289,7 @@ def run_band_backtest(pair_key, base_capital, long_short_band=0.10, foil_decay_b
         "final_target": target,
         "lev_ohlc": lev_ohlc,
         "und_ohlc": und_ohlc,
+        "div_received": div_received,
+        "div_paid": div_paid,
+        "net_dividends": div_received - div_paid
     }

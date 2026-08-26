@@ -24,7 +24,7 @@ load_dotenv()
 
 # Anchor the cache to the project root (parent of src/) so it resolves the same
 # regardless of the process working directory.
-CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache")
+CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache_new")
 
 BORROW_CACHE = os.path.join(CACHE_DIR, "borrow_rates.csv")
 BORROW_HISTORY = os.path.join(CACHE_DIR, "borrow_history.csv")
@@ -51,6 +51,19 @@ def get_prices(ticker):
     df.to_csv(path)
     return df
 
+def get_dividends(ticker):
+    """Return a DataFrame of cash dividends indexed by ex_dividend_date for ticker.
+    Cache-first: read ./cache/{ticker}_divs.csv if present, else fetch from
+    Polygon, write the cache, and return. Empty DataFrame (no rows) if the
+    ticker has no dividend history.
+    """
+    path = os.path.join(CACHE_DIR, f"{ticker}_divs.csv")
+    if os.path.exists(path):
+        return pd.read_csv(path, index_col="ex_dividend_date", parse_dates=True)
+    df = _fetch_polygon_dividends(ticker)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    df.to_csv(path)
+    return df
 
 def get_borrow_rates():
     """Return IBKR indicative borrow rates, or None if unavailable.
@@ -189,3 +202,35 @@ def _fetch_polygon(ticker):
     )
     df = df[["date", "open", "high", "low", "close", "volume"]]
     return df.set_index("date").sort_index()
+
+
+def _fetch_polygon_dividends(ticker):
+    """Fetch all cash dividends for ticker from Polygon's reference endpoint.
+
+    Returns a DataFrame indexed by ex_dividend_date with a single
+    'cash_amount' column ($ per share). Empty DataFrame if none.
+    """
+    api_key = os.environ["POLYGON_API_KEY"]
+    url = "https://api.polygon.io/v3/reference/dividends"
+    rows = []
+    params = {"ticker": ticker, "limit": 1000, "apiKey": api_key}
+    while True:
+        for _attempt in range(5):
+            resp = requests.get(url, params=params)
+            if resp.status_code != 429:
+                break
+            time.sleep(15)
+        resp.raise_for_status()
+        payload = resp.json()
+        rows.extend(payload.get("results") or [])
+        next_url = payload.get("next_url")
+        if not next_url:
+            break
+        url, params = next_url, {"apiKey": api_key}  # next_url carries its own query
+
+    if not rows:
+        return pd.DataFrame(columns=["cash_amount"]).rename_axis("ex_dividend_date")
+
+    df = pd.DataFrame(rows)[["ex_dividend_date", "cash_amount"]]
+    df["ex_dividend_date"] = pd.to_datetime(df["ex_dividend_date"]).dt.normalize()
+    return df.set_index("ex_dividend_date").sort_index()
