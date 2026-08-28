@@ -82,7 +82,7 @@ def _price(ib, ticker):
         waited += _SNAPSHOT_POLL_SECONDS
         price = snap.marketPrice()
     
-    if price is None or price != price or price == 0
+    if price is None or price != price or price == 0:
         return None
     return price
  
