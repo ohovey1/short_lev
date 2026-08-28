@@ -67,9 +67,9 @@ def _price(ib, ticker):
     contract = Stock(ticker, "SMART", "USD")
     [qualified] = ib.qualifyContracts(contract)
     if qualified.conId == 0:
-        # qualifyContracts leaves conId at 0, rather than raising, when IBKR
-        # doesn't recognize the symbol -- e.g. a typo. Treat it the same as
-        # "no price" so the caller's existing missing-symbol message covers it.
+        # qualifyContracts leaves conId at 0, rather than raising when IBKR
+        # doesn't recognize the symbol (like typo). Treat it the same as
+        # "no price" so the existing missing-symbol message covers it.
         return None
     [snap] = ib.reqTickers(qualified)
     price = snap.marketPrice()
@@ -164,8 +164,7 @@ def build_calc_reply(ib, args):
  
  
 # ---------------------------------------------------------------------------
-# Telegram plumbing -- same shape as bot.py's get_updates/run, deliberately
-# kept parallel so the two files stay easy to compare.
+# Telegram  -- same shape as bot.py's get_updates/run for comparison
  
 def get_updates(token, offset):
     """One long poll. Raises on transport or API failure; run() owns backoff."""
@@ -210,9 +209,7 @@ def run(ib):
  
     # No persisted offset: this bot is stateless by design (no
     # StateDirectory=, see the unit file). Starting at 0 means a restart can
-    # re-answer at most one in-flight /calc -- an acceptable cost for a
-    # what-if calculator with no side effects, in exchange for not needing a
-    # state file at all.
+    # re-answer at most one in-flight /calc
     offset = 0
     backoff = BACKOFF_START
  
@@ -249,6 +246,11 @@ def main():
     )
     ib = IB()
     ib.connect(IB_HOST, IB_PORT, clientId=CALC_CLIENT_ID, readonly=True)
+    # other bot runs off assumption of held position
+    # if not holding position, can only get 15 min delayed data
+    # mismatdh and worth noting for both: to stay accurate here, and if any
+    # new positions there
+    ib.reqMarketDataType(3)
     log.info("connected to IB Gateway for price lookups: host=%s port=%s clientId=%s",
               IB_HOST, IB_PORT, CALC_CLIENT_ID)
     try:
