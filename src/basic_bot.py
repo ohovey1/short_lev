@@ -61,6 +61,8 @@ def _rates_for(short_ticker, leverage):
     return (REG_T_LONG_RATE, REG_T_SHORT_RATE_PER_LEVERAGE * leverage, leverage,
             "generic Reg-T fallback -- NOT IBKR-confirmed for this ticker")
  
+_SNAPSHOT_WAIT_SECONDS = 3.0
+_SNAPSHOT_POLL_SECONDS = 0.25
  
 def _price(ib, ticker):
     """Attempts to fetch a live price, or returns None."""
@@ -72,8 +74,15 @@ def _price(ib, ticker):
         # "no price" so the existing missing-symbol message covers it.
         return None
     [snap] = ib.reqTickers(qualified)
+    waited = 0.0
     price = snap.marketPrice()
-    if price is None or price != price:  # NaN check
+    
+    while (price is None or price != price or price == 0) and waited < _SNAPSHOT_WAIT_SECONDS:  # NaN check
+        ib.sleep(_SNAPSHOT_POLL_SECONDS)
+        waited += _SNAPSHOT_POLL_SECONDS
+        price = snap.marketPrice()
+    
+    if price is None or price != price or price == 0
         return None
     return price
  
