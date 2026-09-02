@@ -180,7 +180,7 @@ def build_calc_reply(ib, args):
             f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares:,d} sh"
         ))
     else:
-        lines.append("No trip -- current shares are both within bands.")
+        lines.append(e("No trip -- current shares are both within bands."))
  
     lines.append(e(
         "\n(Only foil-decay and long-short are checked here. Drawdown stop and "
