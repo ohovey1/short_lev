@@ -134,7 +134,7 @@ def build_calc_reply(ib, args):
     e = notify.escape_md_v2
  
     lines = [
-        "*" + e(f"*CURRENT PRICES FOR {short_ticker.upper()} & {long_ticker.upper()}") + "*",
+        "*" + e(f"CURRENT PRICES FOR {short_ticker.upper()} & {long_ticker.upper()}") + "*",
         e(f"{short_ticker.upper()} (short) @ ${price_short:,.2f} x {shares_short:,.0f} sh "
           f"= ${short_notional:,.2f}"),
         e(f"{long_ticker.upper()} (long)  @ ${price_long:,.2f} x {shares_long:,.0f} sh "
@@ -157,7 +157,7 @@ def build_calc_reply(ib, args):
         "",
         e(f"bands (config.py defaults): long_short={config.DEFAULT_LONG_SHORT_BAND:.0%}  "
           f"foil_decay={config.DEFAULT_FOIL_DECAY_BAND:.0%}"),
-        ""
+        "",
         "*" + e("ACTION TO TAKE") + "*",
     ]
  
