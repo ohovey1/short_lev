@@ -132,24 +132,30 @@ def build_calc_reply(ib, args):
     net_delta = long_notional - leverage * short_notional
  
     lines = [
+        f"*CURRENT PRICES FOR {short_ticker.upper()} & {long_ticker.upper()}"
         f"{short_ticker.upper()} (short) @ ${price_short:,.2f} x {shares_short:,.0f} sh "
         f"= ${short_notional:,.2f}",
         f"{long_ticker.upper()} (long)  @ ${price_long:,.2f} x {shares_long:,.0f} sh "
         f"= ${long_notional:,.2f}",
         "",
-        f"leverage={leverage:g}  margin_multiplier={margin_mult:.3f}  "
-        f"(long_rate={long_rate:.2f}, short_rate={short_rate:.2f})",
-        f"rates source: {rate_source}",
+        f"Leverage: {leverage:g}",
+        f"Margin multiplier: {margin_mult:.3f} (long rate={long_rate:.2f}, short rate={short_rate:.2f})",
+        f"Rates source: {rate_source}",
         "",
-        f"target (short) = base_capital ${base_capital:,.2f} x "
-        f"capital_utilization {config.DEFAULT_CAPITAL_UTILIZATION:.0%} / "
-        f"margin_multiplier {margin_mult:.3f} = ${target:,.2f}",
-        f"net_delta = long ${long_notional:,.2f} - leverage {leverage:g} x "
-        f"short ${short_notional:,.2f} = ${net_delta:,.2f}",
+        "*BAND TRIP PARAMETERS*",
+        "Target (short) = ",
+        f"base_capital ${base_capital:,.2f} x capital_utilization {config.DEFAULT_CAPITAL_UTILIZATION:.0%} / ",
+        f"margin_multiplier {margin_mult:.3f}",
+        f"= ${target:,.2f}",
+        "",
+        f"Net distance limit = long ${long_notional:,.2f} - leverage {leverage:g} x "
+        f"short ${short_notional:,.2f}",
+        f"= ${net_delta:,.2f}",
         "",
         f"bands (config.py defaults): long_short={config.DEFAULT_LONG_SHORT_BAND:.0%}  "
         f"foil_decay={config.DEFAULT_FOIL_DECAY_BAND:.0%}",
-        "",
+        ""
+        "*ACTION TO TAKE*",
     ]
  
     if abs(short_notional - target) > config.DEFAULT_FOIL_DECAY_BAND * target:
