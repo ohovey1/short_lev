@@ -31,6 +31,7 @@ from ib_async import IB, Stock
  
 import config
 import notify
+import asyncio
  
 load_dotenv()
 log = logging.getLogger("basic_bot")
@@ -47,6 +48,11 @@ BACKOFF_MAX = 300
 # in case we check a pair not in config, which shouldn't happen now
 REG_T_LONG_RATE = 0.25
 REG_T_SHORT_RATE_PER_LEVERAGE = 0.30
+
+RECONNECT_BACKOFF_START = 10
+RECONNECT_BACKOFF_MAX = 300
+
+DISCONNECT_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError, TimeoutError)
  
 USAGE = (
     "Usage: /calc SHORT_TICKER LONG_TICKER LEVERAGE SHARES_SHORT SHARES_LONG BASE_CAPITAL\n"
@@ -174,7 +180,33 @@ def build_calc_reply(ib, args):
     )
  
     return "\n".join(lines)
- 
+
+def connect_with_backoff(backoff=RECONNECT_BACKOFF_START):
+    """
+    Connect or reconnect to IB Gateway, and continuously retry.
+    """
+    while True:
+        try:
+            ib = IB()
+            ib.connect(IB_HOST, IB_PORT, clientId=CALC_CLIENT_ID, readonly=True)
+            # other bot runs off assumption of held position
+            # if not holding position, can only get 15 min delayed data
+            # mismatch and worth noting for both: to stay accurate here, and if any
+            # new positions there
+            ib.reqMarketDataType(3)
+            log.info(
+                "connected to IB Gateway for price lookups: host=%s port=%s clientId=%s",
+                IB_HOST, IB_PORT, CALC_CLIENT_ID,
+            )
+            return ib
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            log.warning("IB connect failed: %s: %s -- retrying in %ds",
+                  type(e).__name__, e, backoff)      
+            log.debug("connect traceback", exc_info=True)
+            IB.sleep(backoff)
+            backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX)
  
 # ---------------------------------------------------------------------------
 # Telegram  -- same shape as bot.py's get_updates/run for comparison
@@ -216,7 +248,7 @@ def handle_message(ib, message, token, configured_chat_id):
         log.warning("reply to /calc failed: %s", error)
  
  
-def run(ib):
+def run():
     token = os.environ["TELEGRAM_BASIC_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_BASIC_CHAT_ID"]
  
@@ -225,31 +257,47 @@ def run(ib):
     # re-answer at most one in-flight /calc
     offset = 0
     backoff = BACKOFF_START
+    ib_backoff = RECONNECT_BACKOFF_START
+    
+    ib = connect_with_backoff()
  
     log.info("basic_bot: chat_id=%s (TELEGRAM_BASIC_CHAT_ID) clientId=%s",
               chat_id, CALC_CLIENT_ID)
- 
-    while True:
-        try:
-            updates = get_updates(token, offset)
-        except KeyboardInterrupt:
-            log.info("interrupted; shutting down")
-            return
-        except Exception as exc:
-            log.warning("getUpdates failed: %s: %s -- retrying in %ds",
-                        type(exc).__name__, exc, backoff)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, BACKOFF_MAX)
-            continue
- 
-        backoff = BACKOFF_START
-        for update in updates:
+    
+    try:
+        while True:
+            if not ib.isConnected():
+                log.warning("IB not connected; reconnecting")
+                ib = connect_with_backoff(ib_backoff)
+                ib_backoff = RECONNECT_BACKOFF_START
+                
+            
             try:
-                if "message" in update:
-                    handle_message(ib, update["message"], token, chat_id)
-            except Exception:
-                log.exception("update %s failed; skipping", update.get("update_id"))
-            offset = update.get("update_id", offset)
+                updates = get_updates(token, offset)
+            except KeyboardInterrupt:
+                log.info("interrupted; shutting down")
+                return
+            except Exception as exc:
+                log.warning("getUpdates failed: %s: %s -- retrying in %ds",
+                            type(exc).__name__, exc, backoff)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, BACKOFF_MAX)
+                continue
+ 
+            backoff = BACKOFF_START
+            for update in updates:
+                try:
+                    if "message" in update:
+                        handle_message(ib, update["message"], token, chat_id)
+                except DISCONNECT_ERRORS as e:
+                    log.warning("IB disconnnected mid-update: %s: %s",
+                                type(e).__name__, e)
+                except Exception:
+                    log.exception("update %s failed; skipping", update.get("update_id"))
+                offset = update.get("update_id", offset)
+    finally:
+        if ib.isConnected:
+            ib.disconnect()
  
  
 def main():
@@ -257,20 +305,7 @@ def main():
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
-    ib = IB()
-    ib.connect(IB_HOST, IB_PORT, clientId=CALC_CLIENT_ID, readonly=True)
-    # other bot runs off assumption of held position
-    # if not holding position, can only get 15 min delayed data
-    # mismatdh and worth noting for both: to stay accurate here, and if any
-    # new positions there
-    ib.reqMarketDataType(3)
-    log.info("connected to IB Gateway for price lookups: host=%s port=%s clientId=%s",
-              IB_HOST, IB_PORT, CALC_CLIENT_ID)
-    try:
-        run(ib)
-    finally:
-        if ib.isConnected():
-            ib.disconnect()
+    run()
  
  
 if __name__ == "__main__":
