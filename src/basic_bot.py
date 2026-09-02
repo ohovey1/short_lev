@@ -252,7 +252,7 @@ def handle_message(ib, message, token, configured_chat_id):
  
     args = text.split()[1:]
     reply = build_calc_reply(ib, args)
-    delivered, error, _ = notify.send_text(token, configured_chat_id)
+    delivered, error, _ = notify.send_text(token, configured_chat_id, reply)
     if not delivered:
         log.warning("reply to /calc failed: %s", error)
  
