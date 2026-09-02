@@ -130,60 +130,63 @@ def build_calc_reply(ib, args):
     short_notional = shares_short * price_short
     long_notional = shares_long * price_long
     net_delta = long_notional - leverage * short_notional
+    
+    e = notify.escape_md_v2
  
     lines = [
-        f"*CURRENT PRICES FOR {short_ticker.upper()} & {long_ticker.upper()}"
-        f"{short_ticker.upper()} (short) @ ${price_short:,.2f} x {shares_short:,.0f} sh "
-        f"= ${short_notional:,.2f}",
-        f"{long_ticker.upper()} (long)  @ ${price_long:,.2f} x {shares_long:,.0f} sh "
-        f"= ${long_notional:,.2f}",
+        "*" + e(f"*CURRENT PRICES FOR {short_ticker.upper()} & {long_ticker.upper()}") + "*",
+        e(f"{short_ticker.upper()} (short) @ ${price_short:,.2f} x {shares_short:,.0f} sh "
+          f"= ${short_notional:,.2f}"),
+        e(f"{long_ticker.upper()} (long)  @ ${price_long:,.2f} x {shares_long:,.0f} sh "
+          f"= ${long_notional:,.2f}"),
         "",
-        f"Leverage: {leverage:g}",
-        f"Margin multiplier: {margin_mult:.3f} (long rate={long_rate:.2f}, short rate={short_rate:.2f})",
-        f"Rates source: {rate_source}",
+        e(f"Leverage: {leverage:g}"),
+        e(f"Margin multiplier: {margin_mult:.3f} (long rate={long_rate:.2f}, short rate={short_rate:.2f})"),
+        e(f"Rates source: {rate_source}"),
         "",
-        "*BAND TRIP PARAMETERS*",
-        "Target (short) = ",
-        f"base_capital ${base_capital:,.2f} x capital_utilization {config.DEFAULT_CAPITAL_UTILIZATION:.0%} / ",
-        f"margin_multiplier {margin_mult:.3f}",
-        f"= ${target:,.2f}",
+        "*" + e("BAND TRIP PARAMETERS") + "*",
+        e("Target (short) = "),
+        e(f"base_capital ${base_capital:,.2f} x capital_utilization {config.DEFAULT_CAPITAL_UTILIZATION:.0%} / "),
+        e(f"margin_multiplier {margin_mult:.3f}"),
+        e(f"= ${target:,.2f}"),
         "",
-        f"Net distance limit = long ${long_notional:,.2f} - leverage {leverage:g} x "
-        f"short ${short_notional:,.2f}",
-        f"= ${net_delta:,.2f}",
+        e("Net distance limit = "),
+        e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
+          f"short ${short_notional:,.2f}"),
+        e(f"= ${net_delta:,.2f}"),
         "",
-        f"bands (config.py defaults): long_short={config.DEFAULT_LONG_SHORT_BAND:.0%}  "
-        f"foil_decay={config.DEFAULT_FOIL_DECAY_BAND:.0%}",
+        e(f"bands (config.py defaults): long_short={config.DEFAULT_LONG_SHORT_BAND:.0%}  "
+          f"foil_decay={config.DEFAULT_FOIL_DECAY_BAND:.0%}"),
         ""
-        "*ACTION TO TAKE*",
+        "*" + e("ACTION TO TAKE") + "*",
     ]
  
     if abs(short_notional - target) > config.DEFAULT_FOIL_DECAY_BAND * target:
         new_short_shares = round(target / price_short)
         new_long_shares = round((leverage * target) / price_long)
-        lines.append(
+        lines.append(e(
             f"TRIP: foil decay band -- short notional is "
             f"{abs(short_notional - target) / target:.1%} off target.\n"
             f"  Reset both legs to target:\n"
             f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares:,d} sh\n"
             f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares:,d} sh"
-        )
+        ))
     elif abs(net_delta) > config.DEFAULT_LONG_SHORT_BAND * target:
         new_long_shares = round((leverage * short_notional) / price_long)
-        lines.append(
+        lines.append(e(
             f"TRIP: long-short band -- net delta is "
             f"{abs(net_delta) / target:.1%} of target.\n"
             f"  Short leg unchanged. Resize long leg only:\n"
             f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares:,d} sh"
-        )
+        ))
     else:
         lines.append("No trip -- current shares are both within bands.")
  
-    lines.append(
+    lines.append(e(
         "\n(Only foil-decay and long-short are checked here. Drawdown stop and "
         "margin de-risk both need a live position's persisted peak_equity / "
         "actual maintenance margin, which this what-if calculator has no reason to hold.)"
-    )
+    ))
  
     return "\n".join(lines)
 
@@ -249,7 +252,7 @@ def handle_message(ib, message, token, configured_chat_id):
  
     args = text.split()[1:]
     reply = build_calc_reply(ib, args)
-    delivered, error, _ = notify.send_text(token, configured_chat_id, notify.escape_md_v2(reply))
+    delivered, error, _ = notify.send_text(token, configured_chat_id)
     if not delivered:
         log.warning("reply to /calc failed: %s", error)
  
