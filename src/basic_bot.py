@@ -552,13 +552,13 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
             log.info("Unknown command %s from chat %s", command, chat_id)
             return # unknown command
     except Exception as e:
-       log.exception("Error processing command %s with args %s", command, args)
+       log.debug("Error processing command %s with args %s", command, args)
        reply = f"An unexpected error occurred while processing your command: {e}"
 
             
-    log.info("Attempting to send reply:\n%s", reply)
+    log.debug("Attempting to send reply:\n%s", reply)
     delivered, error, telegram_response = notify.send_text(token, configured_chat_id, reply)
-    log.info("notify.send_text result: delivered=%s, error=%s, raw_response=%s", 
+    log.debug("notify.send_text result: delivered=%s, error=%s, raw_response=%s", 
              delivered, error, telegram_response)
     
     if not delivered:
