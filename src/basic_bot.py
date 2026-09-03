@@ -32,6 +32,11 @@ from ib_async import IB, Stock
 import config
 import notify
 import asyncio
+
+import datetime
+from zoneinfo import ZoneInfo
+
+import watch_state
  
 load_dotenv()
 log = logging.getLogger("basic_bot")
@@ -59,6 +64,31 @@ USAGE = (
     "Example: /calc TSLL TSLA 2 100 250 10000"
 )
  
+ET = ZoneInfo("America/New_York")
+
+WATCH_POLL_SECONDS = float(os.environ.get("WATCH_POLL_SECONDS", 1800)) # todo
+NEARING_BAND_FRACTION = 0.8
+
+def _time_env(name, default_hour, default_minute):
+    """
+    Same format as heartbeat_time
+    """
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default_hour, default_minute
+    try:
+        if ":" in raw:
+            hour, minute = raw.split(":", 1)
+            return int(hour), int(minute)
+        return int(raw), 0
+    except ValueError:
+        log.warning("%s=%r is not readable; using %02d:%02d",
+                    name, raw, default_hour, default_minute)
+        return default_hour, default_minute
+
+MORNING_HOUR, MORNING_MINUTE = _time_env("WATCHING_MORNING_HOUR", 9, 30)
+EOD_HOUR, EOD_MINUTE = _time_env("WATCH_EOD_HOUR", 15, 55)
+
  
 def _rates_for(short_ticker, leverage):
     pair = config.PAIRS.get(short_ticker.upper())
@@ -95,8 +125,7 @@ def _price(ib, ticker):
     if price is None or price != price or price == 0:
         return None
     return price
- 
- 
+
 def build_calc_reply(ib, args):
     """Args in, reply text out. Pure given the ib price lookups."""
     if len(args) != 6:
@@ -190,6 +219,257 @@ def build_calc_reply(ib, args):
  
     return "\n".join(lines)
 
+def _pair_reading(ib, pair_key, entry):
+    """
+    Price on both legs and computes current fractions. Or None if no prices or
+    nothing set for pair.
+    
+    Target rederived every time.
+    """
+    shares_short = entry.get("shares_short")
+    shares_long = entry.get("shares_long")
+    base_capital = entry.get("base_capital")
+    if not shares_short or not shares_long or not base_capital:
+        return None
+    
+    pair = config.PAIRS[pair_key]
+    price_short = _price(ib, pair["leveraged_ticker"])
+    price_long = _price(ib, pair["underlying_ticker"])
+    if price_short is None or price_long is None:
+        log.warning("%s: no live price for %s -- skipping this cycle",
+                    pair_key, pair["leveraged_ticker"] if price_short is None
+                    else pair["underlying_ticker"])
+        return None
+    
+    margin_mult = config.margin_multiplier(pair)
+    target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
+    short_notional = shares_short * price_short
+    long_notional = shares_long * price_long
+    net_delta = long_notional - pair["leverage"] * short_notional
+    
+    return {
+        "target": target,
+        "foil_frac": abs(short_notional - target) / target,
+        "long_short_frac": abs(net_delta) / target
+    }
+
+def _alert_level(frac, band):
+    """
+    None, near, or trip for fractions against band width
+    """
+    if band <= 0:
+        return None
+    if frac >= band:
+        return "trip"
+    if frac >= NEARING_BAND_FRACTION * band:
+        return "near"
+    return None
+
+def _maybe_alert(pair_key, label, entry, state_key, new_level, frac, band, send):
+    """
+    Parameters
+    ----------
+    pair_key : the leveraged ticker for pair
+    label : the type of trip
+    entry : entry in watch_state cache
+    state_key : the last entry for given pair
+    new_level : the last kind of alert
+    frac : the actual current frac for this pair
+    band : the parameter for bands where trip happens
+    send : parameter on whether to send alert
+
+    Returns
+    -------
+    Send only transition. Level is uncahgned since last cycle means chat already
+    notified. Trip just cleared gets 'resolved' line and not just quiet.
+
+    """
+    old_level = entry.get(state_key)
+    if new_level == old_level:
+        return
+    
+    if new_level == "trip":
+        send(f"TRIP ({label}) -- {pair_key}: {frac:.1%} of a {band:.0%} band.")
+    elif new_level == "near":
+        send(f"Nearing ({label}) -- {pair_key}: {frac:.1%} of a {band:.0%} band.")
+    elif old_level is not None:
+        send(f"Resolved ({label}) -- {pair_key}: back inside band ({frac:.1%}).")
+        
+    entry[state_key] = new_level
+    entry["last_alert_ts"] = datetime.datetime.now(ET).isoformat()
+    
+def _check_pair(ib, pair_key, state, send):
+    entry = watch_state.pair_entry(state, pair_key)
+    reading = _pair_reading(ib, pair_key, entry)
+    if reading is None:
+        return
+    
+    foil_level = _alert_level(reading["foil_frac"], config.DEFAULT_FOIL_DECAY_BAND)
+    ls_level = _alert_level(reading["long_short_frac"], config.DEFAULT_LONG_SHORT_BAND)
+    
+    _maybe_alert(pair_key, "foil", entry, "last_alert_foil", foil_level, 
+                 reading["foil_frac"], config.DEFAULT_FOIL_DECAY_BAND, send)
+    _maybe_alert(pair_key, "long-short", entry, "last_alert_long_short", ls_level, 
+                 reading["long_short_frac"], config.DEFAULT_LONG_SHORT_BAND, send)
+        
+def _heartbeat_due(state, key, now_et, hour, minute):
+    today = now_et.date().isoformat()
+    if state.get(key) == today:
+        return False
+    if (now_et.hour, now_et.minute) < (hour, minute):
+        return False
+    return True
+
+def _tracked_summary(state):
+    tracked = [(k, e) for k, e in state["pairs"].items()
+               if e.get("shares_short") and e.get("shares_long")]
+    if not tracked:
+        return " (no pairs have shares set)"
+    return "/n".join(f" {k}: short {e['shares_short']:,.0f} / "
+                     f" long {e['shares_long']:,.0f}" for k, e in tracked)
+
+def _run_heartbeat_if_due(state, send):
+    now = datetime.datetime.now(ET)
+    summary = _tracked_summary(state)
+    
+    if _heartbeat_due(state, "last_morning_date", now, MORNING_HOUR, MORNING_MINUTE):
+        send(f"Morning check-in: alive.\Tracking:\n{summary}")
+        state["last_morning_date"] - now.date().isoformat()
+    if _heartbeat_due(state, "last_eod_date", now, EOD_HOUR, EOD_MINUTE):
+        send(f"End-od-day check-in: alive.\Tracking:\n{summary}")
+        state["last_eod_date"] - now.date().isoformat()
+        
+def _handle_setshares(ib, args, state):
+    if len(args) != 3:
+        return ("Usage: /setshares PAIR_KEY SHARES_SHORT SHARES_LONG\n"
+                "Example: /setshares TSLL 100 250\n"
+                "Base capital is back-solved from current price, assuming short"
+                "leg is where you want it now.")
+    
+    pair_key, shares_short_s, shares_long_s = args
+    pair_key = pair_key.upper()
+    if pair_key not in config.PAIRS:
+        return f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}"
+    try:
+        shares_short = float(shares_short_s)
+        shares_long = float(shares_long_s)
+    except ValueError:
+        return "Shares must be numbers."
+    if shares_short <= 0 or shares_long <= 0:
+        return "Both share counts should be entered as positive values."
+    
+    pair = config.PAIRS[pair_key]
+    price_short = _price(ib, pair["leveraged_ticker"])
+    price_long = _price(ib, pair["underlying_ticker"])
+    if price_short is None or price_long is None:
+        missing = pair["leveraged_ticker"] if price_short is None else pair["underlying_ticker"]
+        return f"No live price for {missing} right now -- try again in a moment."
+    
+    
+    margin_mult = config.margin_multiplier(pair)
+    short_notional = shares_short * price_short
+    long_notional = shares_long * price_long
+    base_capital = short_notional * margin_mult / config.DEFAULT_CAPITAL_UTILIZATION
+    target = short_notional
+    net_delta = long_notional - pair["leverage"] * short_notional
+    long_short_frac = abs(net_delta) / target
+    
+    entry = watch_state.pair_entry(state, pair_key)
+    entry["shares_short"] = shares_short
+    entry["shares_long"] = shares_long
+    entry["base_capital"] = base_capital
+    
+    entry["last_alert_foil"] = None
+    entry["last_alert_long_short"] = _alert_level(long_short_frac, config.DEFAULT_LONG_SHORT_BAND)
+    
+    lines = [
+        f"{pair_key}: short {shares_short:,.0f} @ ${price_short:,.2f}, "
+        f"long {shares_long:,.0f} @ ${price_long:,.2f}",
+        f"Back-solved base_capital = ${base_capital:,.2f} (target = ${target:,.2f})",
+    ]
+    if entry["last_alert_long_short"]:
+        lines.append(
+            f"Note: long-short is already at {long_short_frac:.1%} of its "
+            f"{config.DEFAULT_LONG_SHORT_BAND:.0%} band with these numbers -- "
+            f"not flagged as new since you just set it."
+        )
+    return "\n".join(lines)
+
+def _handle_resize(ib, args, state):
+    if len(args) != 3:
+        return ("Usage: /resize PAIR_KEY SHARES_SHORT SHARES_LONG\n"
+                "Changes share counts without moving target. Enter total new"
+                "share count, not just the number of added/subtracted shares."
+                "Use /setshares instead if you want to restart position.")
+    
+    pair_key, shares_short_s, shares_long_s = args
+    pair_key = pair_key.upper()
+    if pair_key not in config.PAIRS:
+        return f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}"
+    
+    entry = watch_state.pair_entry(state, pair_key)
+    base_capital = entry.get("base_capital")
+    if not base_capital:
+        return f"{pair_key} has no target set yet -- use /setshares first."
+    
+    try:
+        shares_short = float(shares_short_s)
+        shares_long = float(shares_long_s)
+    except ValueError:
+        return "Shares must be numbers."
+    if shares_short <= 0 or shares_long <= 0:
+        return "Both share counts should be entered as positive values."
+    
+    pair = config.PAIRS[pair_key]
+    price_short = _price(ib, pair["leveraged_ticker"])
+    price_long = _price(ib, pair["underlying_ticker"])
+    if price_short is None or price_long is None:
+        missing = pair["leveraged_ticker"] if price_short is None else pair["underlying_ticker"]
+        return f"No live price for {missing} right now -- try again in a moment."
+    
+    margin_mult = config.margin_multiplier(pair)
+    target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
+    short_notional = shares_short * price_short
+    long_notional = shares_long * price_long
+    net_delta = long_notional - pair["leverage"] * short_notional
+    foil_frac = abs(short_notional - target) / target
+    long_short_frac = abs(net_delta) / target
+    
+    entry["shares_short"] = shares_short
+    entry["shares_long"] = shares_long
+    
+    entry["last_alert_foil"] = _alert_level(foil_frac, config.DEFAULT_FOIL_DECAY_BAND)
+    entry["last_alert_long_short"] = _alert_level(long_short_frac, config.DEFAULT_LONG_SHORT_BAND)
+    
+    lines = [
+        f"{pair_key}: short {shares_short:,.0f} @ ${price_short:,.2f}, "
+        f"long {shares_long:,.0f} @ ${price_long:,.2f}",
+        f"Target unchanged: target = ${target:,.2f} (= ${base_capital:,.2f})",
+        f"foil={foil_frac:.1%} of {config.DEFAULT_FOIL_DECAY_BAND:.0%} band, "
+        f"foil={long_short_frac:.1%} of {config.DEFAULT_LONG_SHORT_BAND:.0%} band, "
+    ]
+    if entry["last_alert_foil"] or entry["last_alert_long_short"]:
+        lines.append(
+            "Note: Already inside a warn/trip range with these numbers -- "
+            "not flagged as new new since you just set it."
+        )
+    return "\n".join(lines)
+    
+def _handle_shares_report(state):
+    if not state["pairs"]:
+        return "No pairs have shares set. Use /setshares to add one."
+    lines = []
+    for k, e in state["pairs"].items():
+        if e.get("shares_short") and e.get("shares_long") and e.get("base_capital"):
+            pair = config.PAIRS[k]
+            target = (e["base_capital"] * config.DEFAULT_CAPITAL_UTILIZATION
+                      / config.margin_multiplier(pair))
+            lines.append(
+                f"{k}: short {e['shares_short']:,.0f} / long {e['shares_long']:,.0f} "
+                f"(target ${target:,.2f})"
+            )
+    return "\n".join(lines) if lines else "No pairs have shares set."
+    
 def connect_with_backoff(backoff=RECONNECT_BACKOFF_START):
     """
     Connect or reconnect to IB Gateway, and continuously retry.
@@ -234,9 +514,9 @@ def get_updates(token, offset):
     return body.get("result", [])
  
  
-def handle_message(ib, message, token, configured_chat_id):
+def handle_message(ib, message, token, configured_chat_id, state): # todo
     text = (message.get("text") or "").strip()
-    if not text.startswith("/calc"):
+    if not text.startswith("/"):
         return
  
     chat_id = message.get("chat", {}).get("id")
@@ -247,14 +527,29 @@ def handle_message(ib, message, token, configured_chat_id):
         # configured_chat_id here is TELEGRAM_BASIC_CHAT_ID -- deliberately
         # its own chat, separate from the monitor's TELEGRAM_CHAT_ID alert
         # channel, so /calc traffic never mixes with live-position alerts.
-        log.info("unauthorized /calc from chat %s -- ignoring", chat_id)
+        log.info("unauthorized command from chat %s -- ignoring", chat_id)
         return
- 
+    
+    command = text.split()[0].split("@")[0].lower()
     args = text.split()[1:]
-    reply = build_calc_reply(ib, args)
+    
+    if command == "\calc":
+        reply = build_calc_reply(ib, args)
+    if command == "\setshares":
+        reply = _handle_setshares(ib, args)
+        reply = notify.escape_md_v2(reply)
+    if command == "\resize":
+        reply = _handle_resize(ib, args)
+        reply = notify.escape_md_v2(reply)
+    if command == "\shares":
+        reply = _handle_shares_report(ib, args)
+        reply = notify.escape_md_v2(reply)
+    else:
+        return # unknown command
+        
     delivered, error, _ = notify.send_text(token, configured_chat_id, reply)
     if not delivered:
-        log.warning("reply to /calc failed: %s", error)
+        log.warning("reply to /calc failed: %s", command, error)
  
  
 def run():
@@ -267,11 +562,18 @@ def run():
     offset = 0
     backoff = BACKOFF_START
     ib_backoff = RECONNECT_BACKOFF_START
+    state = watch_state.load(watch_state.state_path())
+    last_watch_check = 0.0
     
     ib = connect_with_backoff()
  
     log.info("basic_bot: chat_id=%s (TELEGRAM_BASIC_CHAT_ID) clientId=%s",
               chat_id, CALC_CLIENT_ID)
+    
+    def send(text):
+        delivered, error, _ = notify.send_text(token, chat_id, text)
+        if not delivered:
+            log.warning("watched alert send failed: %s", error)
     
     try:
         while True:
@@ -304,6 +606,15 @@ def run():
                 except Exception:
                     log.exception("update %s failed; skipping", update.get("update_id"))
                 offset = update.get("update_id", offset)
+                
+            now_monotonic = time.monotonic()
+            if now_monotonic - last_watch_check >= WATCH_POLL_SECONDS:
+                for pair_key in config.PAIRS:
+                    _check_pair(ib, pair_key, state, send)
+                _run_heartbeat_if_due(state, send)
+                last_watch_check = now_monotonic
+                
+            watch_state.save(watch_state.state_path(), state)
     finally:
         if ib.isConnected:
             ib.disconnect()
