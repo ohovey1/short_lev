@@ -599,7 +599,7 @@ def run():
             for update in updates:
                 try:
                     if "message" in update:
-                        handle_message(ib, update["message"], token, chat_id)
+                        handle_message(ib, update["message"], token, chat_id, state)
                 except DISCONNECT_ERRORS as e:
                     log.warning("IB disconnnected mid-update: %s: %s",
                                 type(e).__name__, e)
