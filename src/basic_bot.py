@@ -276,7 +276,7 @@ def _maybe_alert(pair_key, label, entry, state_key, new_level, frac, band, send)
     new_level : the last kind of alert
     frac : the actual current frac for this pair
     band : the parameter for bands where trip happens
-    send : parameter on whether to send alert
+    send : function to send
 
     Returns
     -------
@@ -533,6 +533,7 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
     command = text.split()[0].split("@")[0].lower()
     args = text.split()[1:]
     
+    reply = ""
     if command == "/calc":
         reply = build_calc_reply(ib, args)
     if command == "/setshares":
@@ -545,13 +546,18 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
         reply = _handle_shares_report(ib, args, state)
         reply = notify.escape_md_v2(reply)
     else:
+        log.info("Unknown command %s from chat %s", command, chat_id)
         return # unknown command
-        
-    delivered, error, _ = notify.send_text(token, configured_chat_id, reply)
+            
+    log.info("Attempting to send reply:\n%s", reply)
+    delivered, error, telegram_response = notify.send_text(token, configured_chat_id, reply)
+    log.info("notify.send_text result: delivered=%s, error=%s, raw_response=%s", 
+             delivered, error, telegram_response)
+    
     if not delivered:
         log.warning("reply to /calc failed: %s", command, error)
  
- 
+    
 def run():
     token = os.environ["TELEGRAM_BASIC_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_BASIC_CHAT_ID"]
