@@ -533,15 +533,15 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
     command = text.split()[0].split("@")[0].lower()
     args = text.split()[1:]
     
-    if command == "\calc":
+    if command == "/calc":
         reply = build_calc_reply(ib, args)
-    if command == "\setshares":
+    if command == "/setshares":
         reply = _handle_setshares(ib, args)
         reply = notify.escape_md_v2(reply)
-    if command == "\resize":
+    if command == "/resize":
         reply = _handle_resize(ib, args)
         reply = notify.escape_md_v2(reply)
-    if command == "\shares":
+    if command == "/shares":
         reply = _handle_shares_report(ib, args)
         reply = notify.escape_md_v2(reply)
     else:
