@@ -536,13 +536,13 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
     if command == "/calc":
         reply = build_calc_reply(ib, args)
     if command == "/setshares":
-        reply = _handle_setshares(ib, args)
+        reply = _handle_setshares(ib, args, state)
         reply = notify.escape_md_v2(reply)
     if command == "/resize":
-        reply = _handle_resize(ib, args)
+        reply = _handle_resize(ib, args, state)
         reply = notify.escape_md_v2(reply)
     if command == "/shares":
-        reply = _handle_shares_report(ib, args)
+        reply = _handle_shares_report(ib, args, state)
         reply = notify.escape_md_v2(reply)
     else:
         return # unknown command
