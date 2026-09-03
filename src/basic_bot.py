@@ -533,6 +533,8 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
     command = text.split()[0].split("@")[0].lower()
     args = text.split()[1:]
     
+    log.debug("Deubg: command=%r (type=%s)", command, type(command))
+    
     reply = ""
     if command == "/calc":
         reply = build_calc_reply(ib, args)
@@ -628,7 +630,7 @@ def run():
  
 def main():
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
     run()
