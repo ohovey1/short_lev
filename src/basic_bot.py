@@ -532,35 +532,24 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
     
     command = text.split()[0].split("@")[0].lower()
     args = text.split()[1:]
-    
-    log.debug("Debug: command=%r (type=%s), args=%r", command, type(command), args)
-    
-    reply = ""
-    try:
-        if command == "/calc":
-            reply = build_calc_reply(ib, args)
-        if command == "/setshares":
-            reply = _handle_setshares(ib, args, state)
-            reply = notify.escape_md_v2(reply)
-        if command == "/resize":
-            reply = _handle_resize(ib, args, state)
-            reply = notify.escape_md_v2(reply)
-        if command == "/shares":
-            reply = _handle_shares_report(state)
-            reply = notify.escape_md_v2(reply)
-        else:
-            log.info("Unknown command %s from chat %s", command, chat_id)
-            return # unknown command
-    except Exception as e:
-       log.debug("Error processing command %s with args %s", command, args)
-       reply = f"An unexpected error occurred while processing your command: {e}"
+       
+    if command == "/calc":
+        reply = build_calc_reply(ib, args)
+    elif command == "/setshares":
+        reply = _handle_setshares(ib, args, state)
+        reply = notify.escape_md_v2(reply)
+    elif command == "/resize":
+        reply = _handle_resize(ib, args, state)
+        reply = notify.escape_md_v2(reply)
+    elif command == "/shares":
+        reply = _handle_shares_report(state)
+        reply = notify.escape_md_v2(reply)
+    else:
+        log.info("Unknown command %s from chat %s", command, chat_id)
+        return # unknown command
 
             
-    log.debug("Attempting to send reply:\n%s", reply)
-    delivered, error, telegram_response = notify.send_text(token, configured_chat_id, reply)
-    log.debug("notify.send_text result: delivered=%s, error=%s, raw_response=%s", 
-             delivered, error, telegram_response)
-    
+    delivered, error, _ = notify.send_text(token, configured_chat_id, reply)    
     if not delivered:
         log.warning("reply to %s failed: %s", command, error)
  
@@ -635,7 +624,7 @@ def run():
  
 def main():
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
     run()
