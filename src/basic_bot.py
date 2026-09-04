@@ -446,9 +446,9 @@ def _handle_setshares(ib, args, state):
     signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
     
     lines.append(f"Foil decay: {_band_bar(signed_foil)}")
-    lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band.")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
-    lines.append(f"Long-short: {_band_bar(signed_ls)}")
+    lines.append(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band.")
     
     return "\n".join(lines)
 
@@ -515,9 +515,9 @@ def _handle_resize(ib, args, state):
     signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
     
     lines.append(f"Foil decay: {_band_bar(signed_foil)}")
-    lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band.")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
-    lines.append(f"Long-short: {_band_bar(signed_ls)}")
+    lines.append(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band.")
     
     return "\n".join(lines)
 
@@ -566,9 +566,9 @@ def _handle_shares_report(ib, args, state):
             )
             
             lines.append(f"Foil decay: {_band_bar(signed_foil)}")
-            lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+            lines.append(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band.")
             lines.append(f"Long-short: {_band_bar(signed_ls)}")
-            lines.append(f"Long-short: {_band_bar(signed_ls)}")
+            lines.append(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band.")
             
     return "\n".join(lines) if lines else "No pairs have shares set."
 
