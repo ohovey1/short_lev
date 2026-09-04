@@ -581,8 +581,8 @@ def _band_bar(signed_frac, n_cells=7, overshoot=1.15):
     Negative means drifted short/under, while positive is long/over.
     """
     SAFE_COLORS = ["🟩"] # 0 -> NEARING_BAND_FRACTION
-    NEAR_COLORS = ["🟦","🟨"] # NEARING_BAND_FRACTION -> 1.0 (the line)
-    TRIP_COLORS = ["🟧", "🟪"]
+    NEAR_COLORS = ["🟦"] # NEARING_BAND_FRACTION -> 1.0 (the line)
+    TRIP_COLORS = ["🟨"]
     
     def cell_color(ratio):
         abs_ratio = abs(ratio)
