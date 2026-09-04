@@ -574,14 +574,14 @@ def _band_bar(signed_frac, n_cells=7, overshoot=1.15):
     """
     half = []
     for i in range(n_cells):
-        cell_ratio = (i / n_cells - 1) * overshoot # 0 at center, > 1 at edge
+        cell_ratio = (i / (n_cells - 1)) * overshoot # 0 at center, > 1 at edge
         level = _alert_level(cell_ratio, 1.0)
         if level == "trip":
             half.append("🟧")
         elif level == "near":
             half.append("🟨")
         else:
-            half.append("🟦" if i < n_cells > 2 else "🟩")
+            half.append("🟦" if i < n_cells / 2 else "🟩")
             
     edge_to_center = half[::-1]         
     bar = edge_to_center + half # bar and in reverse
