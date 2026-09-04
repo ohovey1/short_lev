@@ -62,7 +62,7 @@ DISCONNECT_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError, TimeoutErro
 ET = ZoneInfo("America/New_York")
 
 WATCH_POLL_SECONDS = float(os.environ.get("WATCH_POLL_SECONDS", 1800)) # todo
-NEARING_BAND_FRACTION = 0.8
+NEARING_BAND_FRACTION = 0.7
 
 def _time_env(name, default_hour, default_minute):
     """
@@ -580,9 +580,9 @@ def _band_bar(signed_frac, n_cells=7, overshoot=1.15):
     trip -> orange, near --> yellow, safe --> geen or blue
     Negative means drifted short/under, while positive is long/over.
     """
-    SAFE_COLORS = ["🟩"] # 0 -> NEARING_BAND_FRACTION
-    NEAR_COLORS = ["🟦"] # NEARING_BAND_FRACTION -> 1.0 (the line)
-    TRIP_COLORS = ["🟨"]
+    SAFE_COLORS = ["🟩", "🟦"] # 0 -> NEARING_BAND_FRACTION
+    NEAR_COLORS = ["🟨"] # NEARING_BAND_FRACTION -> 1.0 (the line)
+    TRIP_COLORS = ["🟧", "🟪"]
     
     def cell_color(ratio):
         abs_ratio = abs(ratio)
