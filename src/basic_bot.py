@@ -133,7 +133,7 @@ USAGE = (
 def build_calc_reply(ib, args):
     """Args in, reply text out. Pure given the ib price lookups."""
     if len(args) not in (5, 6):
-        return USAGE
+        return notify.escape_md_v2(USAGE)
  
     short_ticker, long_ticker, leverage_s, shares_short_s, shares_long_s = args[:5]
     base_capital_s = args[5] if len(args) == 6 else None
