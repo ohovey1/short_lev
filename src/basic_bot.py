@@ -210,6 +210,9 @@ def build_calc_reply(ib, args):
               "exactly on target."),
         )
         lines.append("")
+        
+    signed_foil = (short_notional - target) / target / config.DEFAULT_FOIL_DECAY_BAND
+    signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
      
     lines += [
         e(f"target (short) = base_capital ${base_capital:,.2f} x "),
@@ -224,6 +227,8 @@ def build_calc_reply(ib, args):
         "",
         e(f"bands (config.py defaults): long_short={config.DEFAULT_LONG_SHORT_BAND:.0%}  "
           f"foil_decay={config.DEFAULT_FOIL_DECAY_BAND:.0%}"),
+        e(f"Foil decay: {_band_bar(signed_foil)}"),
+        e(f"Long-short: {_band_bar(signed_ls)}"),
         "",
         "*" + e("ACTION TO TAKE") + "*",
     ]
@@ -366,7 +371,7 @@ def _tracked_summary(state):
                if e.get("shares_short") and e.get("shares_long")]
     if not tracked:
         return " (no pairs have shares set)"
-    return "/n".join(f" {k}: short {e['shares_short']:,.0f} / "
+    return "\n".join(f" {k}: short {e['shares_short']:,.0f} / "
                      f" long {e['shares_long']:,.0f}" for k, e in tracked)
 
 def _run_heartbeat_if_due(state, send):
@@ -434,6 +439,13 @@ def _handle_setshares(ib, args, state):
             f"{config.DEFAULT_LONG_SHORT_BAND:.0%} band with these numbers -- "
             f"not flagged as new since you just set it."
         )
+        
+    signed_foil = (short_notional - target) / target / config.DEFAULT_FOIL_DECAY_BAND
+    signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
+    
+    lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"Long-short: {_band_bar(signed_ls)}")
+    
     return "\n".join(lines)
 
 def _handle_resize(ib, args, state):
@@ -494,9 +506,17 @@ def _handle_resize(ib, args, state):
             "Note: Already inside a warn/trip range with these numbers -- "
             "not flagged as new new since you just set it."
         )
-    return "\n".join(lines)
+        
+    signed_foil = (short_notional - target) / target / config.DEFAULT_FOIL_DECAY_BAND
+    signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
     
-def _handle_shares_report(state):
+    lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"Long-short: {_band_bar(signed_ls)}")
+    
+    return "\n".join(lines)
+
+#todo
+def _handle_listshares(state):
     if not state["pairs"]:
         return "No pairs have shares set. Use /setshares to add one."
     lines = []
@@ -510,6 +530,67 @@ def _handle_shares_report(state):
                 f"(target ${target:,.2f})"
             )
     return "\n".join(lines) if lines else "No pairs have shares set."
+    
+def _handle_shares_report(ib, args, state):
+    if not state["pairs"]:
+        return "No pairs have shares set. Use /setshares to add one."
+    lines = []
+    for k, e in state["pairs"].items():
+        if e.get("shares_short") and e.get("shares_long") and e.get("base_capital"):
+            pair = config.PAIRS[k]
+            target = (e["base_capital"] * config.DEFAULT_CAPITAL_UTILIZATION
+                      / config.margin_multiplier(pair))
+            
+            price_short = _price(ib, pair["leveraged_ticker"])
+            price_long = _price(ib, pair["underlying_ticker"])
+            if price_short is None or price_long is None:
+                lines.append(f"{k}: target ${target:,.2f} (no live price right now)")
+                continue
+            
+            short_notional = e["shares_short"] * price_short
+            long_notional = e["shares_long"] * price_long
+            net_delta = long_notional - pair["leverage"] * short_notional
+            
+            signed_foil = (short_notional - target) / target / config.DEFAULT_FOIL_DECAY_BAND
+            signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
+            
+            lines.append(
+                f"{k}: short {e['shares_short']:,.0f} / long {e['shares_long']:,.0f} "
+                f"(target ${target:,.2f})"
+            )
+            
+            lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+            lines.append(f"Long-short: {_band_bar(signed_ls)}")
+            
+    return "\n".join(lines) if lines else "No pairs have shares set."
+
+def _band_bar(signed_frac, n_cells=7, overshoot=1.15):
+    """
+    2*n_cells emoji moji gauge of a signed value/band ratio.
+    signed_frac: value / band_threshold, signed. +-1 = trip line.
+    Colors from alert_level, with band normalized to 1.
+    trip -> orange, near --> yellow, safe --> geen or blue
+    Negative means drifted short/under, while positive is long/over.
+    """
+    half = []
+    for i in range(n_cells):
+        cell_ratio = (i / n_cells - 1) * overshoot # 0 at center, > 1 at edge
+        level = _alert_level(cell_ratio, 1.0)
+        if level == "trip":
+            half.append("🟧")
+        elif level == "near":
+            half.append("🟨")
+        else:
+            half.append("🟦" if i < n_cells > 2 else "🟩")
+            
+    edge_to_center = half[::-1]         
+    bar = edge_to_center + half # bar and in reverse
+    
+    clamped = max(-overshoot, min(overshoot, signed_frac))
+    idx = round((clamped + overshoot) / (2.0*overshoot) * len(bar) - 1)
+    bar[idx] = "✴️" if abs(signed_frac) > 1.0 else "✳️"
+    
+    return "".join(bar)
     
 def connect_with_backoff(backoff=RECONNECT_BACKOFF_START):
     """
@@ -583,7 +664,10 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
         reply = _handle_resize(ib, args, state)
         reply = notify.escape_md_v2(reply)
     elif command == "/shares":
-        reply = _handle_shares_report(state)
+        reply = _handle_shares_report(ib, args, state)
+        reply = notify.escape_md_v2(reply)
+    elif command == "/listshares":
+        reply = _handle_listshares(state)
         reply = notify.escape_md_v2(reply)
     else:
         log.info("Unknown command %s from chat %s", command, chat_id)
