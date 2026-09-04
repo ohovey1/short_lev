@@ -336,12 +336,14 @@ def _maybe_alert(pair_key, label, entry, state_key, new_level, frac, band, send)
     if new_level == old_level:
         return
     
+    e = notify.escape_md_v2
+    
     if new_level == "trip":
-        send(f"TRIP ({label}) -- {pair_key}: {frac:.1%} of a {band:.0%} band.")
+        send(e(f"TRIP ({label}) -- {pair_key}: {frac:.1%} of a {band:.0%} band."))
     elif new_level == "near":
-        send(f"Nearing ({label}) -- {pair_key}: {frac:.1%} of a {band:.0%} band.")
+        send(e(f"Nearing ({label}) -- {pair_key}: {frac:.1%} of a {band:.0%} band."))
     elif old_level is not None:
-        send(f"Resolved ({label}) -- {pair_key}: back inside band ({frac:.1%}).")
+        send(e(f"Resolved ({label}) -- {pair_key}: back inside band ({frac:.1%})."))
         
     entry[state_key] = new_level
     entry["last_alert_ts"] = datetime.datetime.now(ET).isoformat()
@@ -380,11 +382,13 @@ def _run_heartbeat_if_due(state, send):
     now = datetime.datetime.now(ET)
     summary = _tracked_summary(state)
     
+    e = notify.escape_md_v2
+    
     if _heartbeat_due(state, "last_morning_date", now, MORNING_HOUR, MORNING_MINUTE):
-        send(f"Morning check-in: alive.\Tracking:\n{summary}")
+        send(e(f"Morning check-in: alive.\Tracking:\n{summary}"))
         state["last_morning_date"] = now.date().isoformat()
     if _heartbeat_due(state, "last_eod_date", now, EOD_HOUR, EOD_MINUTE):
-        send(f"End-od-day check-in: alive.\Tracking:\n{summary}")
+        send(e(f"End-od-day check-in: alive.\Tracking:\n{summary}"))
         state["last_eod_date"] = now.date().isoformat()
         
 def _handle_setshares(ib, args, state):
