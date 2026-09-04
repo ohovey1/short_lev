@@ -59,11 +59,6 @@ RECONNECT_BACKOFF_MAX = 300
 
 DISCONNECT_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError, TimeoutError)
  
-USAGE = (
-    "Usage: /calc SHORT_TICKER LONG_TICKER LEVERAGE SHARES_SHORT SHARES_LONG BASE_CAPITAL\n"
-    "Example: /calc TSLL TSLA 2 100 250 10000"
-)
- 
 ET = ZoneInfo("America/New_York")
 
 WATCH_POLL_SECONDS = float(os.environ.get("WATCH_POLL_SECONDS", 1800)) # todo
@@ -126,20 +121,34 @@ def _price(ib, ticker):
         return None
     return price
 
+USAGE = (
+    "Usage: /calc SHORT_TICKER LONG_TICKER LEVERAGE SHARES_SHORT SHARES_LONG [BASE_CAPITAL]\n"
+    "Example (from existing long position): /calc TSLL TSLA 2 100 250\n"
+    "Example (from existing short position): /calc TSLL TSLA 2 100 0\n"
+    "Example (if no long position yet): /calc TSLL TSLA 2 0 0 10000\n"
+    "BASE_CAPITAL is required when both share counts are 0 - -- otherwise derived from"
+    "whichever leg is currently held."
+)
+
 def build_calc_reply(ib, args):
     """Args in, reply text out. Pure given the ib price lookups."""
-    if len(args) != 6:
+    if len(args) not in (5, 6):
         return USAGE
  
-    short_ticker, long_ticker, leverage_s, shares_short_s, shares_long_s, base_capital_s = args
+    short_ticker, long_ticker, leverage_s, shares_short_s, shares_long_s = args[:5]
+    base_capital_s = args[5] if len(args) == 6 else None
  
     try:
         leverage_in = float(leverage_s)
         shares_short = float(shares_short_s)
         shares_long = float(shares_long_s)
-        base_capital = float(base_capital_s)
+        base_capital = float(base_capital_s) if base_capital_s is not None else None
     except ValueError:
         return "Leverage, shares, and base_capital must all be numbers.\n\n" + USAGE
+    
+    if base_capital is None and shares_long == 0 and shares_short == 0:
+        return ("BASE_CAPITAL is required when both share coutns are 0 --"
+                "there's no held position to derive it from.\n\n" + USAGE)
  
     price_short = _price(ib, short_ticker)
     price_long = _price(ib, long_ticker)
@@ -154,10 +163,22 @@ def build_calc_reply(ib, args):
  
     long_rate, short_rate, leverage, rate_source = _rates_for(short_ticker, leverage_in)
     margin_mult = long_rate * leverage + short_rate
-    target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
  
     short_notional = shares_short * price_short
     long_notional = shares_long * price_long
+    
+    derived_from = None # None, long, or short
+    
+    if base_capital is None:
+        if shares_long != 0:
+            derived_from = "long"
+            target_for_derivation = long_notional / leverage
+        else:
+            derived_from = "short"
+            target_for_derivation = short_notional        
+        base_capital = target_for_derivation * margin_mult / config.DEFAULT_CAPITAL_UTILIZATION
+        
+    target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
     net_delta = long_notional - leverage * short_notional
     
     e = notify.escape_md_v2
@@ -174,10 +195,29 @@ def build_calc_reply(ib, args):
         e(f"Rates source: {rate_source}"),
         "",
         "*" + e("BAND TRIP PARAMETERS") + "*",
-        e("Target (short) = "),
-        e(f"base_capital ${base_capital:,.2f} x capital_utilization {config.DEFAULT_CAPITAL_UTILIZATION:.0%} / "),
+        ]
+    if derived_from == "long":
+        lines.append(
+            e(f"base_capital not given -- derived as ${base_capital:,.2f} from "
+              "the long leg (${long_notional:,.2f} invested, assuming the book "
+              "is balanced at target."),
+            "",
+        )
+        lines.append("")
+    elif derived_from == "short":
+        lines.append(
+            e(f"base_capital not given -- derived as ${base_capital:,.2f} from "
+              "the short leg (${short_notional:,.2f} held, treated as sitting "
+              "exactly on target."),
+            "",
+        )
+        lines.append("")
+     
+    lines += [
+        e(f"target (short) = base_capital ${base_capital:,.2f} x "),
+        e(f"capital_utilization {config.DEFAULT_CAPITAL_UTILIZATION:.0%} / "),
         e(f"margin_multiplier {margin_mult:.3f}"),
-        e(f"= ${target:,.2f}"),
+        e(f"= {target:,.2f}"),
         "",
         e("Net distance limit = "),
         e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
