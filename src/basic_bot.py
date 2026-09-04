@@ -61,7 +61,7 @@ DISCONNECT_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError, TimeoutErro
  
 ET = ZoneInfo("America/New_York")
 
-WATCH_POLL_SECONDS = float(os.environ.get("WATCH_POLL_SECONDS", 1800)) # todo
+WATCH_POLL_SECONDS = float(os.environ.get("WATCH_POLL_SECONDS", 180)) # todo
 NEARING_BAND_FRACTION = 0.7
 
 def _time_env(name, default_hour, default_minute):
@@ -761,8 +761,18 @@ def run():
             now_monotonic = time.monotonic()
             if now_monotonic - last_watch_check >= WATCH_POLL_SECONDS:
                 for pair_key in config.PAIRS:
-                    _check_pair(ib, pair_key, state, send)
-                _run_heartbeat_if_due(state, send)
+                    try:
+                        _check_pair(ib, pair_key, state, send)
+                    except DISCONNECT_ERRORS as e:
+                        log.warning("Watch check for %s hit a disconect: %s: %s",
+                                    pair_key, type(e).__name__, e)
+                    except Exception:
+                        log.exception("Watch check for %s failed; skipping this cycle",
+                                      pair_key)
+                try:
+                    _run_heartbeat_if_due(state, send)
+                except Exception:
+                    log.exception("Heartbeat check failed; skipping this cycle.")
                 last_watch_check = now_monotonic
                 
             watch_state.save(watch_state.state_path(), state)
