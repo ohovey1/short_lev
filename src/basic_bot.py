@@ -585,22 +585,31 @@ def _band_bar(signed_frac, n_cells=7, overshoot=1.15):
     TRIP_COLORS = ["🟧", "🟪"]
     
     def cell_color(ratio):
-        level = _alert_level(ratio, 1.0)
+        abs_ratio = abs(ratio)
+        level = _alert_level(abs_ratio, 1.0)
         if level is None:
-            zone_pos = ratio / NEARING_BAND_FRACTION if NEARING_BAND_FRACTION else 0
+            zone_pos = abs_ratio / NEARING_BAND_FRACTION if NEARING_BAND_FRACTION else 0
             i = min(len(SAFE_COLORS) - 1, int(zone_pos * len(SAFE_COLORS)))
             return SAFE_COLORS[i]
         if level == "near":
-            zone_pos = (ratio - NEARING_BAND_FRACTION) / (1.0 - NEARING_BAND_FRACTION)
+            zone_pos = (abs_ratio - NEARING_BAND_FRACTION) / (1.0 - NEARING_BAND_FRACTION)
             i = min(len(NEAR_COLORS) - 1, int(zone_pos * len(NEAR_COLORS)))
             return NEAR_COLORS[i]
-        zone_pos = ratio - 1.0
+        zone_pos = abs_ratio - 1.0
         i = min(len(TRIP_COLORS) - 1, int(zone_pos * len(TRIP_COLORS)))
         return TRIP_COLORS[i]
               
     half = [cell_color(i / (n_cells - 1) * 2.0) for i in range(n_cells)]     
     bar = half[::-1]  + half # bar and in reverse
+
+    total_cells = n_cells * 2
     
+    bar = []
+    for i in range(total_cells):
+        # Maps i from 0..13 into a range of -2.0 to +2.0
+        ratio = -2.0 + (i / (total_cells - 1)) * 4.0
+        bar.append(cell_color(ratio))
+        
     clamped = max(-2.0, min(2.0, signed_frac))
     idx = round((clamped + 2.0) / (4.0) * len(bar) - 1)
     bar[idx] = "✴️" if abs(signed_frac) > 1.0 else "✳️"
