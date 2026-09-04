@@ -585,7 +585,7 @@ def _band_bar(signed_frac, n_cells=7, overshoot=1.15):
     TRIP_COLORS = ["🟧", "🟪"]
     
     def cell_color(ratio):
-        level = _alert_level(cell_ratio, 1.0)
+        level = _alert_level(ratio, 1.0)
         if level is None:
             zone_pos = ratio / NEARING_BAND_FRACTION if NEARING_BAND_FRACTION else 0
             i = min(len(SAFE_COLORS) - 1, int(zone_pos * len(SAFE_COLORS)))
