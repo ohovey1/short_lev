@@ -132,8 +132,10 @@ USAGE = (
 
 def build_calc_reply(ib, args):
     """Args in, reply text out. Pure given the ib price lookups."""
+    e = notify.escape_md_v2
+    
     if len(args) not in (5, 6):
-        return notify.escape_md_v2(USAGE)
+        return e(USAGE)
  
     short_ticker, long_ticker, leverage_s, shares_short_s, shares_long_s = args[:5]
     base_capital_s = args[5] if len(args) == 6 else None
@@ -144,11 +146,11 @@ def build_calc_reply(ib, args):
         shares_long = float(shares_long_s)
         base_capital = float(base_capital_s) if base_capital_s is not None else None
     except ValueError:
-        return "Leverage, shares, and base_capital must all be numbers.\n\n" + USAGE
+        return e("Leverage, shares, and base_capital must all be numbers.\n\n") + e(USAGE)
     
     if base_capital is None and shares_long == 0 and shares_short == 0:
-        return ("BASE_CAPITAL is required when both share coutns are 0 --"
-                "there's no held position to derive it from.\n\n" + USAGE)
+        return (e("BASE_CAPITAL is required when both share coutns are 0 --"
+                "there's no held position to derive it from.\n\n") + e(USAGE))
  
     price_short = _price(ib, short_ticker)
     price_long = _price(ib, long_ticker)
@@ -158,8 +160,8 @@ def build_calc_reply(ib, args):
             missing.append(short_ticker.upper())
         if price_long is None:
             missing.append(long_ticker.upper())
-        return (f"Could not get a live price for: {', '.join(missing)}. "
-                f"Check the symbol(s) and try again.")
+        return (e(f"Could not get a live price for: {', '.join(missing)}. ") + 
+                e("Check the symbol(s) and try again."))
  
     long_rate, short_rate, leverage, rate_source = _rates_for(short_ticker, leverage_in)
     margin_mult = long_rate * leverage + short_rate
@@ -180,8 +182,6 @@ def build_calc_reply(ib, args):
         
     target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
     net_delta = long_notional - leverage * short_notional
-    
-    e = notify.escape_md_v2
  
     lines = [
         "*" + e(f"CURRENT PRICES FOR {short_ticker.upper()} & {long_ticker.upper()}") + "*",
