@@ -240,11 +240,14 @@ def build_calc_reply(ib, args):
         ))
     elif abs(net_delta) > config.DEFAULT_LONG_SHORT_BAND * target:
         new_long_shares = round((leverage * short_notional) / price_long)
+        new_short_shares_alt = round(long_notional / (leverage * price_short))
         lines.append(e(
             f"TRIP: long-short band -- net delta is "
             f"{abs(net_delta) / target:.1%} of target.\n"
-            f"  Short leg unchanged. Resize long leg only:\n"
+            f"  Option A: Short leg unchanged. Resize long leg only:\n"
             f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares:,d} sh"
+            f"  Option B: Long leg unchanged. Resize short leg only:\n"
+            f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares_alt:,d} sh"
         ))
     else:
         lines.append(e("No trip -- current shares are both within bands."))
