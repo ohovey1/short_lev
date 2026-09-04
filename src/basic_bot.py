@@ -201,7 +201,6 @@ def build_calc_reply(ib, args):
             e(f"base_capital not given -- derived as ${base_capital:,.2f} from "
               "the long leg (${long_notional:,.2f} invested, assuming the book "
               "is balanced at target."),
-            "",
         )
         lines.append("")
     elif derived_from == "short":
@@ -209,7 +208,6 @@ def build_calc_reply(ib, args):
             e(f"base_capital not given -- derived as ${base_capital:,.2f} from "
               "the short leg (${short_notional:,.2f} held, treated as sitting "
               "exactly on target."),
-            "",
         )
         lines.append("")
      
