@@ -228,7 +228,9 @@ def build_calc_reply(ib, args):
         e(f"bands (config.py defaults): long_short={config.DEFAULT_LONG_SHORT_BAND:.0%}  "
           f"foil_decay={config.DEFAULT_FOIL_DECAY_BAND:.0%}"),
         e(f"Foil decay: {_band_bar(signed_foil)}"),
+        e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
         e(f"Long-short: {_band_bar(signed_ls)}"),
+        e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
         "*" + e("ACTION TO TAKE") + "*",
     ]
@@ -444,6 +446,8 @@ def _handle_setshares(ib, args, state):
     signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
     
     lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"Long-short: {_band_bar(signed_ls)}")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
     
     return "\n".join(lines)
@@ -511,6 +515,8 @@ def _handle_resize(ib, args, state):
     signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
     
     lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"Long-short: {_band_bar(signed_ls)}")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
     
     return "\n".join(lines)
@@ -560,6 +566,8 @@ def _handle_shares_report(ib, args, state):
             )
             
             lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+            lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+            lines.append(f"Long-short: {_band_bar(signed_ls)}")
             lines.append(f"Long-short: {_band_bar(signed_ls)}")
             
     return "\n".join(lines) if lines else "No pairs have shares set."
@@ -572,22 +580,29 @@ def _band_bar(signed_frac, n_cells=7, overshoot=1.15):
     trip -> orange, near --> yellow, safe --> geen or blue
     Negative means drifted short/under, while positive is long/over.
     """
-    half = []
-    for i in range(n_cells):
-        cell_ratio = (i / (n_cells - 1)) * overshoot # 0 at center, > 1 at edge
-        level = _alert_level(cell_ratio, 1.0)
-        if level == "trip":
-            half.append("🟧")
-        elif level == "near":
-            half.append("🟨")
-        else:
-            half.append("🟦" if i < n_cells / 2 else "🟩")
-            
-    edge_to_center = half[::-1]         
-    bar = edge_to_center + half # bar and in reverse
+    SAFE_COLORS = ["🟩"] # 0 -> NEARING_BAND_FRACTION
+    NEAR_COLORS = ["🟦","🟨"] # NEARING_BAND_FRACTION -> 1.0 (the line)
+    TRIP_COLORS = ["🟧", "🟪"]
     
-    clamped = max(-overshoot, min(overshoot, signed_frac))
-    idx = round((clamped + overshoot) / (2.0*overshoot) * len(bar) - 1)
+    def cell_color(ratio):
+        level = _alert_level(cell_ratio, 1.0)
+        if level is None:
+            zone_pos = ratio / NEARING_BAND_FRACTION if NEARING_BAND_FRACTION else 0
+            i = min(len(SAFE_COLORS) - 1, int(zone_pos * len(SAFE_COLORS)))
+            return SAFE_COLORS[i]
+        if level == "near":
+            zone_pos = (ratio - NEARING_BAND_FRACTION) / (1.0 - NEARING_BAND_FRACTION)
+            i = min(len(NEAR_COLORS) - 1, int(zone_pos * len(NEAR_COLORS)))
+            return NEAR_COLORS[i]
+        zone_pos = ratio - 1.0
+        i = min(len(TRIP_COLORS) - 1, int(zone_pos * len(TRIP_COLORS)))
+        return TRIP_COLORS[i]
+              
+    half = [cell_color(i / (n_cells - 1) * 2.0) for i in range(n_cells)]     
+    bar = half[::-1]  + half # bar and in reverse
+    
+    clamped = max(-2.0, min(2.0, signed_frac))
+    idx = round((clamped + 2.0) / (4.0) * len(bar) - 1)
     bar[idx] = "✴️" if abs(signed_frac) > 1.0 else "✳️"
     
     return "".join(bar)
