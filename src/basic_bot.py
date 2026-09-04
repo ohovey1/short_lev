@@ -245,7 +245,7 @@ def build_calc_reply(ib, args):
             f"TRIP: long-short band -- net delta is "
             f"{abs(net_delta) / target:.1%} of target.\n"
             f"  Option A: Short leg unchanged. Resize long leg only:\n"
-            f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares:,d} sh"
+            f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares:,d} sh\n"
             f"  Option B: Long leg unchanged. Resize short leg only:\n"
             f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares_alt:,d} sh"
         ))
