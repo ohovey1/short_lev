@@ -388,7 +388,7 @@ def _run_heartbeat_if_due(state, send):
         send(e(f"Morning check-in: alive.\Tracking:\n{summary}"))
         state["last_morning_date"] = now.date().isoformat()
     if _heartbeat_due(state, "last_eod_date", now, EOD_HOUR, EOD_MINUTE):
-        send(e(f"End-od-day check-in: alive.\Tracking:\n{summary}"))
+        send(e(f"End-of-day check-in: alive.\nTracking:\n{summary}"))
         state["last_eod_date"] = now.date().isoformat()
         
 def _handle_setshares(ib, args, state):
