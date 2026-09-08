@@ -299,7 +299,7 @@ def _pair_reading(ib, pair_key, entry):
     shares_short = entry.get("shares_short")
     shares_long = entry.get("shares_long")
     base_capital = entry.get("base_capital")
-    if not shares_short is None or not shares_long is None or not base_capital is None:
+    if shares_short is None or shares_long is None or base_capital is None:
         return None
     if shares_short == 0 or shares_long == 0:
         return None # deliberately "paused" at 0 shares
@@ -838,7 +838,7 @@ def run():
                 
             watch_state.save(watch_state.state_path(), state)
     finally:
-        if ib.isConnected:
+        if ib.isConnected():
             ib.disconnect()
  
  
