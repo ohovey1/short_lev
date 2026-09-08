@@ -272,14 +272,14 @@ def build_calc_reply(ib, args, state):
             f"{abs(short_notional - target) / target:.1%} off target.\n"
             f"  Option A: Resize both sides:\n"
             f"  Reset both legs to target:\n"
-            f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares:,d} sh\n"
+            f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares:} sh\n"
             f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares:,d} sh\n"
             f" Option B: Short leg unchanged. Resize long leg only:\n"
             f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares_alt:,d} sh\n"
-            f"    Target resized to match short leg: {target:,.0f} -> {new_target_short:,d}\n"
+            f"    Target resized to match short leg: {target:,.0f} -> {new_target_short:,.0f}\n"
             f" Option C: Long leg unchanged. Resize short leg only:\n" 
             f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares:,d} sh\n"
-            f"    Target resized to match long leg: {target:,.0f} -> {new_target_long:,d}"
+            f"    Target resized to match long leg: {target:,.0f} -> {new_target_long:,.0f}"
         ))
     elif abs(net_delta) > config.DEFAULT_LONG_SHORT_BAND * target:
         new_long_shares = round((leverage * short_notional) / price_long)
