@@ -123,6 +123,8 @@ def _price(ib, ticker):
 
 USAGE = (
     "Usage: /calc SHORT_TICKER LONG_TICKER LEVERAGE SHARES_SHORT SHARES_LONG [BASE_CAPITAL]\n"
+    "Shorthand for existing position: /calc PAIR_KEY -- uses stored shares & target if already"
+    "tracked (e.g. /calc TQQQ\n"
     "Example (from existing long position): /calc TSLL TSLA 2 100 250\n"
     "Example (from existing short position): /calc TSLL TSLA 2 100 0\n"
     "Example (if no long position yet): /calc TSLL TSLA 2 0 0 10000\n"
@@ -130,9 +132,29 @@ USAGE = (
     "whichever leg is currently held."
 )
 
-def build_calc_reply(ib, args):
+def build_calc_reply(ib, args, state):
     """Args in, reply text out. Pure given the ib price lookups."""
     e = notify.escape_md_v2
+    
+    # todo
+    # branch for existing tracked positions
+    if len(args) == 1:
+        pair_key = args[0].upper()
+        if pair_key not in config.PAIRS:
+            return e(f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}")
+        entry = state["pairs"].get(pair_key)
+        ss = entry.get("shares_short") if entry else None
+        sl = entry.get("shares_long") if entry else None
+        bc = entry.get("base_capital") if entry else None
+        if ss is None or sl is None or bc is None:
+            return e(f"{pair_key} isn't being tracked yet -- use /setshares "
+                     f"first, or give full /calc args.")
+        if ss == 0 and sl == 0:
+            return e(f"{pair_key} is paused (0/0) -- use /resize to set numbers "
+                     f"first, or give full /calc args.")
+        pair = config.PAIRS[pair_key]
+        args = [pair["leveraged_ticker"], pair["underlying_ticker"], str(pair["leverage"]),
+                str(ss), str(sl), str(bc)]
     
     if len(args) not in (5, 6):
         return e(USAGE)
@@ -270,15 +292,17 @@ def build_calc_reply(ib, args):
 def _pair_reading(ib, pair_key, entry):
     """
     Price on both legs and computes current fractions. Or None if no prices or
-    nothing set for pair.
+    nothing set for pair, or if pair paused (both sides set to 0).
     
     Target rederived every time.
     """
     shares_short = entry.get("shares_short")
     shares_long = entry.get("shares_long")
     base_capital = entry.get("base_capital")
-    if not shares_short or not shares_long or not base_capital:
+    if not shares_short is None or not shares_long is None or not base_capital is None:
         return None
+    if shares_short == 0 or shares_long == 0:
+        return None # deliberately "paused" at 0 shares
     
     pair = config.PAIRS[pair_key]
     price_short = _price(ib, pair["leveraged_ticker"])
@@ -371,12 +395,16 @@ def _heartbeat_due(state, key, now_et, hour, minute):
     return True
 
 def _tracked_summary(state):
-    tracked = [(k, e) for k, e in state["pairs"].items()
-               if e.get("shares_short") and e.get("shares_long")]
-    if not tracked:
-        return " (no pairs have shares set)"
-    return "\n".join(f" {k}: short {e['shares_short']:,.0f} / "
-                     f" long {e['shares_long']:,.0f}" for k, e in tracked)
+    lines = []
+    for k, e in state["pairs"].items():
+        ss, sl =  e.get("shares_short"), e.get("shares_long")
+        if ss is None or sl is None:
+            continue
+        if ss == 0 and sl == 0:
+            lines.append(f" {k}: paused")
+        else:
+            lines.append(f" {k}: short {ss:,.0f} / long {sl:,.0f}")
+    return "\n".join(lines) if lines else  " (no pairs have shares set)"
 
 def _run_heartbeat_if_due(state, send):
     now = datetime.datetime.now(ET)
@@ -459,9 +487,11 @@ def _handle_setshares(ib, args, state):
 def _handle_resize(ib, args, state):
     if len(args) != 3:
         return ("Usage: /resize PAIR_KEY SHARES_SHORT SHARES_LONG\n"
-                "Changes share counts without moving target. Enter total new"
-                "share count, not just the number of added/subtracted shares."
-                "Use /setshares instead if you want to restart position.")
+                "Changes share counts without moving target. Enter total new "
+                "share count, not just the number of added/subtracted shares. "
+                "0 0 pauses the pair but keeps the target."
+                "Use /setshares instead if you want to restart position, or"
+                "/untrack to forget it.")
     
     pair_key, shares_short_s, shares_long_s = args
     pair_key = pair_key.upper()
@@ -478,18 +508,28 @@ def _handle_resize(ib, args, state):
         shares_long = float(shares_long_s)
     except ValueError:
         return "Shares must be numbers."
-    if shares_short <= 0 or shares_long <= 0:
-        return "Both share counts should be entered as positive values."
+    if shares_short < 0 or shares_long < 0:
+        return "Both share counts should be entered as non-negative values."
     
     pair = config.PAIRS[pair_key]
+    margin_mult = config.margin_multiplier(pair)
+    target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
+    
+    if shares_short == 0 and shares_long == 0:
+        entry["shares_short"] = 0
+        entry["shares_long"] = 0
+        entry["last_alert_foil"] = None
+        entry["last_alert_long_short"] = None
+        return (f"{pair_key}: paused. Target kept at ${target:,.2f} -- "
+                f"/resize back to real numbers to resume, or /untrack to "
+                f"forget this pair entirely.")
+    
     price_short = _price(ib, pair["leveraged_ticker"])
     price_long = _price(ib, pair["underlying_ticker"])
     if price_short is None or price_long is None:
         missing = pair["leveraged_ticker"] if price_short is None else pair["underlying_ticker"]
         return f"No live price for {missing} right now -- try again in a moment."
     
-    margin_mult = config.margin_multiplier(pair)
-    target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
     short_notional = shares_short * price_short
     long_notional = shares_long * price_long
     net_delta = long_notional - pair["leverage"] * short_notional
@@ -498,7 +538,6 @@ def _handle_resize(ib, args, state):
     
     entry["shares_short"] = shares_short
     entry["shares_long"] = shares_long
-    
     entry["last_alert_foil"] = _alert_level(foil_frac, config.DEFAULT_FOIL_DECAY_BAND)
     entry["last_alert_long_short"] = _alert_level(long_short_frac, config.DEFAULT_LONG_SHORT_BAND)
     
@@ -507,7 +546,7 @@ def _handle_resize(ib, args, state):
         f"long {shares_long:,.0f} @ ${price_long:,.2f}",
         f"Target unchanged: target = ${target:,.2f} (= ${base_capital:,.2f})",
         f"foil={foil_frac:.1%} of {config.DEFAULT_FOIL_DECAY_BAND:.0%} band, "
-        f"foil={long_short_frac:.1%} of {config.DEFAULT_LONG_SHORT_BAND:.0%} band, "
+        f"long-short={long_short_frac:.1%} of {config.DEFAULT_LONG_SHORT_BAND:.0%} band, "
     ]
     if entry["last_alert_foil"] or entry["last_alert_long_short"]:
         lines.append(
@@ -525,21 +564,36 @@ def _handle_resize(ib, args, state):
     
     return "\n".join(lines)
 
-#todo
+def _handle_untrack(args, state):
+    if len(args != 1):
+        return "Usage: /untrack PAIR_KEY\nExample: /untrack TQQQ"
+    pair_key = args[0].upper()
+    
+    if pair_key not in config. PAIRS:
+        return f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}"
+    entry = state["pairs"].pop(pair_key, None)
+    if entry is None:
+        return f"{pair_key} wasn't being tracked."
+    was = (f"was short {entry.get('shared_short', 0):,.0f} / "
+         f"long {entry.get('shares_long', 0):,.0f}")
+    return f"{pair_key}: stopped tracking({was}). "
+        
 def _handle_listshares(state):
     if not state["pairs"]:
-        return "No pairs have shares set. Use /setshares to add one."
+        return "No pairs have shares set. Use /setshares to add one."\
+            
     lines = []
     for k, e in state["pairs"].items():
-        if e.get("shares_short") and e.get("shares_long") and e.get("base_capital"):
-            pair = config.PAIRS[k]
-            target = (e["base_capital"] * config.DEFAULT_CAPITAL_UTILIZATION
-                      / config.margin_multiplier(pair))
-            lines.append(
-                f"{k}: short {e['shares_short']:,.0f} / long {e['shares_long']:,.0f} "
-                f"(target ${target:,.2f})"
-            )
-    return "\n".join(lines) if lines else "No pairs have shares set."
+        ss, sl, bc =  e.get("shares_short"), e.get("shares_long"),  e.get("base_capital")
+        if ss is None or sl is None or bc is None:
+            continue
+        pair = config.PAIRS[k]
+        target = (bc * config.DEFAULT_CAPITAL_UTILIZATION / config.margin_multiplier(pair))
+        if ss == 0 and sl == 0:
+            lines.append(f" {k}: paused (target ${target:,.2f})")
+        else:
+            lines.append(f" {k}: short {ss:,.0f} / long {sl:,.0f} (target ${target:,.2f})")
+    return "\n".join(lines) if lines else  "No pairs have shares set."
     
 def _handle_shares_report(ib, args, state):
     if not state["pairs"]:
@@ -684,7 +738,7 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
     args = text.split()[1:]
        
     if command == "/calc":
-        reply = build_calc_reply(ib, args)
+        reply = build_calc_reply(ib, args, state)
     elif command == "/setshares":
         reply = _handle_setshares(ib, args, state)
         reply = notify.escape_md_v2(reply)
@@ -697,6 +751,9 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
     elif command == "/listshares":
         reply = _handle_listshares(state)
         reply = notify.escape_md_v2(reply)
+    elif command == "/untrack":
+        reply = _handle_untrack(args, state)
+        reply = notify.escape_md_v2(reply)    
     else:
         log.info("Unknown command %s from chat %s", command, chat_id)
         return # unknown command
