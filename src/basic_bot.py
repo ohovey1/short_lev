@@ -565,7 +565,7 @@ def _handle_resize(ib, args, state):
     return "\n".join(lines)
 
 def _handle_untrack(args, state):
-    if len(args != 1):
+    if len(args) != 1:
         return "Usage: /untrack PAIR_KEY\nExample: /untrack TQQQ"
     pair_key = args[0].upper()
     
