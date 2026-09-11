@@ -243,8 +243,8 @@ def build_calc_reply(ib, args, state):
         )
         lines.append("")
         
-    signed_foil = (short_notional - target) / target / config.DEFAULT_FOIL_DECAY_BAND
-    signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
+    signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
+    signed_ls = net_delta / target / LONG_SHORT_BAND
      
     lines += [
         # e(f"target (short) = base_capital ${base_capital:,.2f} x "),
@@ -252,13 +252,13 @@ def build_calc_reply(ib, args, state):
         # e(f"margin_multiplier {margin_mult:.3f}"),
         # e(f"= {target:,.2f}"),
         # "",
-        e("Net distance limit = "),
-        e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
-          f"short ${short_notional:,.2f}"),
-        e(f"= ${net_delta:,.2f}"),
+        # e("Net distance limit = "),
+        #  e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
+        #   f"short ${short_notional:,.2f}"),
+        # e(f"= ${net_delta:,.2f}"),
         "",
-        e(f"bands (config.py defaults): long_short={config.DEFAULT_LONG_SHORT_BAND:.0%}  "
-          f"foil_decay={config.DEFAULT_FOIL_DECAY_BAND:.0%}"),
+        e(f"bands: long_short=DEFAULT_LONG_SHORT_BAND:.0%}  "
+          f"foil_decay={DEFAULT_FOIL_DECAY_BAND:.0%}"),
         e(f"Foil decay: {_band_bar(signed_foil)}"),
         e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
@@ -269,7 +269,7 @@ def build_calc_reply(ib, args, state):
         "*" + e("ACTION TO TAKE") + "*",
     ]
  
-    if abs(short_notional - target) > config.DEFAULT_FOIL_DECAY_BAND * target:
+    if abs(short_notional - target) > FOIL_DECAY_BAND * target:
         new_short_shares = round(target / price_short)
         new_long_shares = round((leverage * target) / price_long)
         
@@ -292,7 +292,7 @@ def build_calc_reply(ib, args, state):
             f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares:,d} sh\n"
             f"    Target resized to match long leg: ${target:,.0f} -> ${new_target_long:,.0f}"
         ))
-    elif abs(net_delta) > config.DEFAULT_LONG_SHORT_BAND * target:
+    elif abs(net_delta) > LONG_SHORT_BAND * target:
         new_long_shares = round((leverage * short_notional) / price_long)
         new_short_shares_alt = round(long_notional / (leverage * price_short))
         lines.append(e(
@@ -403,13 +403,13 @@ def _check_pair(ib, pair_key, state, send):
     if reading is None:
         return
     
-    foil_level = _alert_level(reading["foil_frac"], config.DEFAULT_FOIL_DECAY_BAND)
-    ls_level = _alert_level(reading["long_short_frac"], config.DEFAULT_LONG_SHORT_BAND)
+    foil_level = _alert_level(reading["foil_frac"], FOIL_DECAY_BAND)
+    ls_level = _alert_level(reading["long_short_frac"], LONG_SHORT_BAND)
     
     _maybe_alert(pair_key, "foil", entry, "last_alert_foil", foil_level, 
-                 reading["foil_frac"], config.DEFAULT_FOIL_DECAY_BAND, send)
+                 reading["foil_frac"], FOIL_DECAY_BAND, send)
     _maybe_alert(pair_key, "long-short", entry, "last_alert_long_short", ls_level, 
-                 reading["long_short_frac"], config.DEFAULT_LONG_SHORT_BAND, send)
+                 reading["long_short_frac"], LONG_SHORT_BAND, send)
         
 def _heartbeat_due(state, key, now_et, hour, minute):
     today = now_et.date().isoformat()
@@ -485,7 +485,7 @@ def _handle_setshares(ib, args, state):
     entry["base_capital"] = base_capital
     
     entry["last_alert_foil"] = None
-    entry["last_alert_long_short"] = _alert_level(long_short_frac, config.DEFAULT_LONG_SHORT_BAND)
+    entry["last_alert_long_short"] = _alert_level(long_short_frac, LONG_SHORT_BAND)
     
     lines = [
         f"{pair_key}: short {shares_short:,.0f} @ ${price_short:,.2f}, "
@@ -495,17 +495,17 @@ def _handle_setshares(ib, args, state):
     if entry["last_alert_long_short"]:
         lines.append(
             f"Note: long-short is already at {long_short_frac:.1%} of its "
-            f"{config.DEFAULT_LONG_SHORT_BAND:.0%} band with these numbers -- "
+            f"{LONG_SHORT_BAND:.0%} band with these numbers -- "
             f"not flagged as new since you just set it."
         )
         
-    signed_foil = (short_notional - target) / target / config.DEFAULT_FOIL_DECAY_BAND
-    signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
+    signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
+    signed_ls = net_delta / target / LONG_SHORT_BAND
     
     lines.append(f"Foil decay: {_band_bar(signed_foil)}")
-    lines.append(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band.")
+    lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.0%} band.")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
-    lines.append(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band.")
+    lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.0%} band.")
     
     return "\n".join(lines)
 
@@ -563,15 +563,15 @@ def _handle_resize(ib, args, state):
     
     entry["shares_short"] = shares_short
     entry["shares_long"] = shares_long
-    entry["last_alert_foil"] = _alert_level(foil_frac, config.DEFAULT_FOIL_DECAY_BAND)
-    entry["last_alert_long_short"] = _alert_level(long_short_frac, config.DEFAULT_LONG_SHORT_BAND)
+    entry["last_alert_foil"] = _alert_level(foil_frac, FOIL_DECAY_BAND)
+    entry["last_alert_long_short"] = _alert_level(long_short_frac, LONG_SHORT_BAND)
     
     lines = [
         f"{pair_key}: short {shares_short:,.0f} @ ${price_short:,.2f}, "
         f"long {shares_long:,.0f} @ ${price_long:,.2f}",
         f"Target unchanged: target = ${target:,.2f} (= ${base_capital:,.2f})",
-        f"foil={foil_frac:.1%} of {config.DEFAULT_FOIL_DECAY_BAND:.0%} band, "
-        f"long-short={long_short_frac:.1%} of {config.DEFAULT_LONG_SHORT_BAND:.0%} band, "
+        f"foil={foil_frac:.1%} of {FOIL_DECAY_BAND:.0%} band, "
+        f"long-short={long_short_frac:.1%} of {LONG_SHORT_BAND:.0%} band, "
     ]
     if entry["last_alert_foil"] or entry["last_alert_long_short"]:
         lines.append(
@@ -579,15 +579,15 @@ def _handle_resize(ib, args, state):
             "not flagged as new new since you just set it."
         )
         
-    signed_foil = (short_notional - target) / target / config.DEFAULT_FOIL_DECAY_BAND
-    signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
+    signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
+    signed_ls = net_delta / target / LONG_SHORT_BAND
     
     lines.append(f"Foil decay: {_band_bar(signed_foil)}")
     lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
-    # lines.append(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band.")
+    # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.0%} band.")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
     lines.append(f"{abs(net_delta) / target:.1%} of target.")
-    # lines.append(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band.")
+    # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.0%} band.")
     
     return "\n".join(lines)
 
@@ -642,8 +642,8 @@ def _handle_shares_report(ib, args, state):
             long_notional = e["shares_long"] * price_long
             net_delta = long_notional - pair["leverage"] * short_notional
             
-            signed_foil = (short_notional - target) / target / config.DEFAULT_FOIL_DECAY_BAND
-            signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
+            signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
+            signed_ls = net_delta / target / LONG_SHORT_BAND
             
             lines.append(
                 f"{k}: short {e['shares_short']:,.0f} / long {e['shares_long']:,.0f} "
@@ -652,10 +652,10 @@ def _handle_shares_report(ib, args, state):
             
             lines.append(f"Foil decay: {_band_bar(signed_foil)}")
             lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
-            # lines.append(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band.")
+            # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.0%} band.")
             lines.append(f"Long-short: {_band_bar(signed_ls)}")
             lines.append(f"{abs(net_delta) / target:.1%} of target.")
-            # lines.append(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band.")
+            # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.0%} band.")
             
     return "\n".join(lines) if lines else "No pairs have shares set."
 
