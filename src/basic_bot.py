@@ -62,7 +62,10 @@ DISCONNECT_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError, TimeoutErro
 ET = ZoneInfo("America/New_York")
 
 WATCH_POLL_SECONDS = float(os.environ.get("WATCH_POLL_SECONDS", 180)) # todo
-NEARING_BAND_FRACTION = 0.7
+NEARING_BAND_FRACTION = 0.5 # 0.7
+
+FOIL_DECAY_BAND = 0.075 # config.DEFAULT_FOIL_DECAY_BAND
+LONG_SHORT_BAND = 0.075 # config.DEFAULT_LONG_SHORT_BAND
 
 def _time_env(name, default_hour, default_minute):
     """
@@ -203,6 +206,7 @@ def build_calc_reply(ib, args, state):
         base_capital = target_for_derivation * margin_mult / config.DEFAULT_CAPITAL_UTILIZATION
         
     target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
+    twice_base = leverage * short_notional
     net_delta = long_notional - leverage * short_notional
  
     lines = [
@@ -212,11 +216,17 @@ def build_calc_reply(ib, args, state):
         e(f"{long_ticker.upper()} (long)  @ ${price_long:,.2f} x {shares_long:,.0f} sh "
           f"= ${long_notional:,.2f}"),
         "",
-        e(f"Leverage: {leverage:g}"),
-        e(f"Margin multiplier: {margin_mult:.3f} (long rate={long_rate:.2f}, short rate={short_rate:.2f})"),
-        e(f"Rates source: {rate_source}"),
+        # e(f"Leverage: {leverage:g}"),
+        # e(f"Margin multiplier: {margin_mult:.3f} (long rate={long_rate:.2f}, short rate={short_rate:.2f})"),
+        # e(f"Rates source: {rate_source}"),
         "",
-        "*" + e("BAND TRIP PARAMETERS") + "*",
+        "*" + e("TARGET PARAMETERS") + "*",
+        e("Leverage {leverage:g} * {short_ticker.upper()} ${short_notional:,.2f} = "),
+        e(f"${twice_base:,.2f}\n"),
+        e("Net distance limit = "),
+        e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
+          f"short ${short_notional:,.2f}"),
+        e(f"= ${net_delta:,.2f}"),
         ]
     if derived_from == "long":
         lines.append(
@@ -237,11 +247,11 @@ def build_calc_reply(ib, args, state):
     signed_ls = net_delta / target / config.DEFAULT_LONG_SHORT_BAND
      
     lines += [
-        e(f"target (short) = base_capital ${base_capital:,.2f} x "),
-        e(f"capital_utilization {config.DEFAULT_CAPITAL_UTILIZATION:.0%} / "),
-        e(f"margin_multiplier {margin_mult:.3f}"),
-        e(f"= {target:,.2f}"),
-        "",
+        # e(f"target (short) = base_capital ${base_capital:,.2f} x "),
+        # e(f"capital_utilization {config.DEFAULT_CAPITAL_UTILIZATION:.0%} / "),
+        # e(f"margin_multiplier {margin_mult:.3f}"),
+        # e(f"= {target:,.2f}"),
+        # "",
         e("Net distance limit = "),
         e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
           f"short ${short_notional:,.2f}"),
@@ -653,7 +663,7 @@ def _band_bar(signed_frac, n_cells=7, overshoot=1.15):
     """
     SAFE_COLORS = ["🟩", "🟦"] # 0 -> NEARING_BAND_FRACTION
     NEAR_COLORS = ["🟨"] # NEARING_BAND_FRACTION -> 1.0 (the line)
-    TRIP_COLORS = ["🟧", "🟪"]
+    TRIP_COLORS = ["🟧"] #  "🟪"]
     
     def cell_color(ratio):
         abs_ratio = abs(ratio)
