@@ -211,10 +211,10 @@ def build_calc_reply(ib, args, state):
  
     lines = [
         "*" + e(f"CURRENT PRICES FOR {short_ticker.upper()} & {long_ticker.upper()}") + "*",
-        e(f"{short_ticker.upper()} (short) @ ${price_short:,.2f} x {shares_short:,.0f} sh "
-          f"= ${short_notional:,.2f}"),
         e(f"{long_ticker.upper()} (long)  @ ${price_long:,.2f} x {shares_long:,.0f} sh "
           f"= ${long_notional:,.2f}"),
+        e(f"{short_ticker.upper()} (short) @ ${price_short:,.2f} x {shares_short:,.0f} sh "
+          f"= ${short_notional:,.2f}"),
         # "",
         # e(f"Leverage: {leverage:g}"),
         # e(f"Margin multiplier: {margin_mult:.3f} (long rate={long_rate:.2f}, short rate={short_rate:.2f})"),
