@@ -257,8 +257,8 @@ def build_calc_reply(ib, args, state):
         #   f"short ${short_notional:,.2f}"),
         # e(f"= ${net_delta:,.2f}"),
         "",
-        e(f"bands: long_short=DEFAULT_LONG_SHORT_BAND:.0%}  "
-          f"foil_decay={DEFAULT_FOIL_DECAY_BAND:.0%}"),
+        e(f"bands: long_short={LONG_SHORT_BAND:.0%}  "
+          f"foil_decay={FOIL_DECAY_BAND:.0%}"),
         e(f"Foil decay: {_band_bar(signed_foil)}"),
         e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
