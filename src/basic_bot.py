@@ -258,8 +258,8 @@ def build_calc_reply(ib, args, state):
         # e(f"= ${net_delta:,.2f}"),
         "",
         e(f"bands: long_short={LONG_SHORT_BAND:.2%}  "
-          f"foil_decay={FOIL_DECAY_BAND:.2%}"),
-        e(f"Foil decay: {_band_bar(signed_foil)}"),
+          f"FOIL_decay={FOIL_DECAY_BAND:.2%}"),
+        e(f"FOIL decay: {_band_bar(signed_foil)}"),
         e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
         e(f"Long-short: {_band_bar(signed_ls)}"),
@@ -280,7 +280,7 @@ def build_calc_reply(ib, args, state):
         new_short_shares_alt = round(new_target_long / price_short)
     
         lines.append(e(
-            f"TRIP: foil decay band -- short notional is "
+            f"TRIP: FOIL decay band -- short notional is "
             f"{abs(short_notional - target) / target:.1%} off target.\n"
             f"  Option A: Reset both legs to target:\n"
             f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares:,d} sh\n"
@@ -305,12 +305,13 @@ def build_calc_reply(ib, args, state):
         ))
     else:
         lines.append(e("No trip -- current shares are both within bands."))
- 
+    
+    """
     lines.append(e(
         "\n(Only foil-decay and long-short are checked here. Drawdown stop and "
         "margin de-risk both need a live position's persisted peak_equity / "
         "actual maintenance margin, which this what-if calculator has no reason to hold.)"
-    ))
+    ))"""
  
     return "\n".join(lines)
 
@@ -502,7 +503,7 @@ def _handle_setshares(ib, args, state):
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
     signed_ls = net_delta / target / LONG_SHORT_BAND
     
-    lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
     lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
     # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:20%} band.")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
@@ -572,7 +573,7 @@ def _handle_resize(ib, args, state):
         f"{pair_key}: short {shares_short:,.0f} @ ${price_short:,.2f}, "
         f"long {shares_long:,.0f} @ ${price_long:,.2f}",
         f"Target unchanged: target = ${target:,.2f} (= ${base_capital:,.2f})",
-        f"foil={foil_frac:.1%} of {FOIL_DECAY_BAND:.2%} band, "
+        f"FOIL={foil_frac:.1%} of {FOIL_DECAY_BAND:.2%} band, "
         f"long-short={long_short_frac:.1%} of {LONG_SHORT_BAND:.2%} band, "
     ]
     if entry["last_alert_foil"] or entry["last_alert_long_short"]:
@@ -584,7 +585,7 @@ def _handle_resize(ib, args, state):
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
     signed_ls = net_delta / target / LONG_SHORT_BAND
     
-    lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+    lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
     lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
     # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
@@ -652,11 +653,11 @@ def _handle_shares_report(ib, args, state):
                 f"(target ${target:,.2f})"
             )
             
-            lines.append(f"Foil decay: {_band_bar(signed_foil)}")
+            lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
             lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
             # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
             lines.append(f"Long-short: {_band_bar(signed_ls)}")
-            lines.append(f"{abs(net_delta) / target:.1%} of target.")
+            lines.append(f"{abs(net_delta) / target:.1%} off target.")
             # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
             
     return "\n".join(lines) if lines else "No pairs have shares set."
