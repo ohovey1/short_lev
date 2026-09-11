@@ -221,7 +221,7 @@ def build_calc_reply(ib, args, state):
         # e(f"Rates source: {rate_source}"),
         "",
         "*" + e("TARGET PARAMETERS") + "*",
-        e("Leverage {leverage:g} * {short_ticker.upper()} ${short_notional:,.2f} = "),
+        e(f"Leverage {leverage:g} * {short_ticker.upper()} ${short_notional:,.2f} = "),
         e(f"${twice_base:,.2f}\n"),
         e("Net distance limit = "),
         e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
