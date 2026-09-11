@@ -222,11 +222,11 @@ def build_calc_reply(ib, args, state):
         "",
         "*" + e("TARGET PARAMETERS") + "*",
         e(f"Leverage {leverage:g} * {short_ticker.upper()} ${short_notional:,.2f} = "),
-        e(f"${twice_base:,.2f}\n"),
+        "*" + e(f"${twice_base:,.2f}\n") + "*",
         e("Net distance limit = "),
         e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
           f"short ${short_notional:,.2f}"),
-        e(f"= ${net_delta:,.2f}"),
+        "*" + e(f"= ${net_delta:,.2f}") + "*",
         ]
     if derived_from == "long":
         lines.append(
@@ -388,11 +388,11 @@ def _maybe_alert(pair_key, label, entry, state_key, new_level, frac, band, send)
     e = notify.escape_md_v2
     
     if new_level == "trip":
-        send(e(f"TRIP ({label}) -- {pair_key}: {frac:.1%} of a {band:.0%} band."))
+        send(e(f"TRIP ({label}) -- {pair_key}: {frac:.1%} of a {band:.2%} band."))
     elif new_level == "near":
-        send(e(f"Nearing ({label}) -- {pair_key}: {frac:.1%} of a {band:.0%} band."))
+        send(e(f"Nearing ({label}) -- {pair_key}: {frac:.1%} of a {band:.2%} band."))
     elif old_level is not None:
-        send(e(f"Resolved ({label}) -- {pair_key}: back inside band ({frac:.1%})."))
+        send(e(f"Resolved ({label}) -- {pair_key}: back inside band ({frac:.2%})."))
         
     entry[state_key] = new_level
     entry["last_alert_ts"] = datetime.datetime.now(ET).isoformat()
@@ -495,7 +495,7 @@ def _handle_setshares(ib, args, state):
     if entry["last_alert_long_short"]:
         lines.append(
             f"Note: long-short is already at {long_short_frac:.1%} of its "
-            f"{LONG_SHORT_BAND:.0%} band with these numbers -- "
+            f"{LONG_SHORT_BAND:.2%} band with these numbers -- "
             f"not flagged as new since you just set it."
         )
         
@@ -504,10 +504,10 @@ def _handle_setshares(ib, args, state):
     
     lines.append(f"Foil decay: {_band_bar(signed_foil)}")
     lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
-    # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.0%} band.")
+    # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:20%} band.")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
     lines.append(f"{abs(net_delta) / target:.1%} off target.")
-    # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.0%} band.")
+    # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
     
     return "\n".join(lines)
 
@@ -572,8 +572,8 @@ def _handle_resize(ib, args, state):
         f"{pair_key}: short {shares_short:,.0f} @ ${price_short:,.2f}, "
         f"long {shares_long:,.0f} @ ${price_long:,.2f}",
         f"Target unchanged: target = ${target:,.2f} (= ${base_capital:,.2f})",
-        f"foil={foil_frac:.1%} of {FOIL_DECAY_BAND:.0%} band, "
-        f"long-short={long_short_frac:.1%} of {LONG_SHORT_BAND:.0%} band, "
+        f"foil={foil_frac:.1%} of {FOIL_DECAY_BAND:.2%} band, "
+        f"long-short={long_short_frac:.1%} of {LONG_SHORT_BAND:.2%} band, "
     ]
     if entry["last_alert_foil"] or entry["last_alert_long_short"]:
         lines.append(
@@ -586,10 +586,10 @@ def _handle_resize(ib, args, state):
     
     lines.append(f"Foil decay: {_band_bar(signed_foil)}")
     lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
-    # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.0%} band.")
+    # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
     lines.append(f"Long-short: {_band_bar(signed_ls)}")
     lines.append(f"{abs(net_delta) / target:.1%} off target.")
-    # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.0%} band.")
+    # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
     
     return "\n".join(lines)
 
@@ -654,10 +654,10 @@ def _handle_shares_report(ib, args, state):
             
             lines.append(f"Foil decay: {_band_bar(signed_foil)}")
             lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
-            # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.0%} band.")
+            # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
             lines.append(f"Long-short: {_band_bar(signed_ls)}")
             lines.append(f"{abs(net_delta) / target:.1%} of target.")
-            # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.0%} band.")
+            # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
             
     return "\n".join(lines) if lines else "No pairs have shares set."
 
