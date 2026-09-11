@@ -110,14 +110,14 @@ def _price(ib, ticker):
         waited = 0.0
         price = ticker_obj.marketPrice()
     
-        while (price is None or price != price or price == 0) and waited < _SNAPSHOT_WAIT_SECONDS:  # NaN check
+        while (price is None or price != price or price <= 0) and waited < _SNAPSHOT_WAIT_SECONDS:  # NaN check
             ib.sleep(_SNAPSHOT_POLL_SECONDS)
             waited += _SNAPSHOT_POLL_SECONDS
             price = ticker_obj.marketPrice()
     finally: 
         ib.cancelMktData(qualified)
             
-    if price is None or price != price or price == 0:
+    if price is None or price != price or price <= 0:
         return None
     return price
 
@@ -262,7 +262,7 @@ def build_calc_reply(ib, args, state):
         new_long_shares = round((leverage * target) / price_long)
         
         new_target_short = short_notional
-        new_long_shares_alt = round((leverage * new_target_short) / price_long) # todo
+        new_long_shares_alt = round((leverage * new_target_short) / price_long)
         
         new_target_long = long_notional / leverage
         new_short_shares_alt = round(new_target_long / price_short)
