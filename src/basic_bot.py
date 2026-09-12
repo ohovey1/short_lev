@@ -470,7 +470,7 @@ def build_calc_reply(ib, args, state):
             f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares_alt:,d} sh\n"
             f"    Target resized to match short leg: ${target:,.0f} -> ${new_target_short:,.0f}\n"
             f" Option C: Long leg unchanged. Reset target to match and resize short leg only:\n" 
-            f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares:,d} sh\n"
+            f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares_alt:,d} sh\n"
             f"    Target resized to match long leg: ${target:,.0f} -> ${new_target_long:,.0f}"
         ))
     elif abs(net_delta) > LONG_SHORT_BAND * target:
