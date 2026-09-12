@@ -870,10 +870,10 @@ def _band_bar(signed_frac, n_cells=8, defining_band=0.75):
     bar = half[::-1] + half
     
     separator = "┃"  
+    bar.insert(11, separator)
+    bar.insert(5, separator)
+    bar.insert(6, separator)
     bar.insert(12, separator)
-    bar.insert(4, separator)
-    bar.insert(3, separator)
-    bar.insert(13, separator)
     
     max_val = n_cells * step
     clamped = max(-max_val, min(max_val, signed_frac))
