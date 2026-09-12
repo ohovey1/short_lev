@@ -775,6 +775,88 @@ def _handle_resize(ib, args, state):
     
     return "\n".join(lines)
 
+def _handle_rescale(ib, args, state):
+    if len(args) != 3:
+        return ("Usage: /rescale PAIR_KEY NEW_SHARES_SHORT NEW_SHARES_LONG\n"
+                "For growing/shrinking the whole position on purpose -- scales "
+                "base by same ratio as short leg change, so % off target carries "
+                "through instead of exploding or resetting to 0."
+                "Use /resize to correct toward existing target or /setshares to "
+                "recenter the target at a new position.")
+    
+    pair_key, shares_short_s, shares_long_s = args
+    pair_key = pair_key.upper()
+    if pair_key not in config.PAIRS:
+        return f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}"
+    
+    entry = watch_state.pair_entry(state, pair_key)
+    old_short = entry.get("shares_short")
+    old_long = entry.get("shares_long")
+    base_capital = entry.get("base_capital")
+    if old_short is None or base_capital is None:
+        return f"{pair_key} has no position set yet -- use /setshares first."
+    if old_short == 0:
+        return (f"{pair_key} is paused at 0 shares -- use /resize to add real "
+                "numbers first, or /setshares to start fresh.")
+    
+    try:
+        new_short = float(shares_short_s)
+        new_long = float(shares_long_s)
+    except ValueError:
+        return "Shares must be numbers."
+    if new_short <= 0 or new_long <= 0:
+        return ("Both share counts should be entered as positive values. " 
+                "Use /resize 0 0 to pause instead.")
+    
+    pair = config.PAIRS[pair_key]
+    price_short = _price(ib, pair["leveraged_ticker"])
+    price_long = _price(ib, pair["underlying_ticker"])
+    if price_short is None or price_long is None:
+        missing = []
+        if price_short is None:
+            missing.append(pair["leveraged_ticker"].upper())
+        if price_long is None:
+            missing.append(pair["underlying_ticker"].upper())
+        return (f"Could not get a live price for: {', '.join(missing)}. " 
+                "Check the symbol(s) and try again.")
+    scale_factor = new_short / old_short
+    new_base_capital = base_capital * scale_factor
+    
+    margin_mult = config.margin_multiplier(pair)
+    old_target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
+    new_target = (new_base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
+    
+    short_notional = new_short * price_short
+    long_notional = new_long * price_long
+    net_delta = long_notional - pair["leverage"] * short_notional
+    
+    foil_frac = abs(short_notional - new_target) / new_target
+    long_short_frac = abs(net_delta) / new_target
+    
+    entry["shares_short"] = new_short
+    entry["shares_long"] = new_long
+    entry["base_capital"] = new_base_capital
+    entry["last_alert_foil"] = _alert_level(foil_frac, FOIL_DECAY_BAND)
+    entry["last_alert_long_short"] = _alert_level(long_short_frac, LONG_SHORT_BAND)
+    
+    lines = [f"{pair_key}: scaled {scale_factor:.3f}x (short leg {old_short:,.0f} --> {new_short:,.0f})",
+             f"Target scaled to match: ${old_target:,.2f} --> ${new_target:,.2f} "
+             f"Base capital: ${base_capital:,.2f} --> ${new_base_capital:,.2f}",
+             f"Long-short = {abs(net_delta) / new_target:.1%} off target band"
+             "FOIL decay = {abs(short_notional - new_target) / new_target:.1%} off target."]
+    
+    if old_long:
+        long_scale_factor = new_long / old_long
+        if abs(long_scale_factor - scale_factor) > 0.02:
+            lines.append(
+                f"Note: long leg scaled {long_scale_factor:.3f}x vs. short leg "
+                f"{scale_factor:.3f}x -- these differ, so this also shifted the "
+                f"long-short balance, not just overall size."
+            )
+    
+    return "\n".join(lines)
+    
+
 def _handle_untrack(args, state):
     if len(args) != 1:
         return "Usage: /untrack PAIR_KEY\nExample: /untrack TQQQ"
@@ -975,6 +1057,9 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
         reply = notify.escape_md_v2(reply)    
     elif command == "/calcfull":
         reply = build_calcfull_reply(ib, args, state)
+    elif command == "/rescale":
+        reply = _handle_rescale(ib, args, state)
+        reply = notify.escape_md_v2(reply)    
     else:
         log.info("Unknown command %s from chat %s", command, chat_id)
         return # unknown command
