@@ -883,8 +883,8 @@ def _band_bar(signed_frac, n_cells=8, overshoot=1.2):
         
         cell_char = cell_color(ratio)
         
-        is_neg_bound = (ratio <= NEARING_BAND_FRACTION < next_ratio)
-        is_pos_bound = (ratio <= NEARING_BAND_FRACTION < next_ratio) or (i == total_cells - 1 and ratio >= NEARING_BAND_FRACTION)
+        is_neg_bound = (ratio <= LONG_SHORT_BAND < next_ratio)
+        is_pos_bound = (ratio <= LONG_SHORT_BAND < next_ratio) or (i == total_cells - 1 and ratio >= LONG_SHORT_BAND)
         
         if is_neg_bound or is_pos_bound:
             cell_char = "|"
