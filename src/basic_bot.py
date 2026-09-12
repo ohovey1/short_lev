@@ -877,9 +877,19 @@ def _band_bar(signed_frac, n_cells=8, overshoot=1.2):
     
     bar = []
     for i in range(total_cells):
-        # Maps i from 0..13 into a range of -2.0 to +2.0
+        # Maps i from 0 into a range of -2.0 to +2.0
         ratio = -2.0 + (i / (total_cells - 1)) * 4.0
-        bar.append(cell_color(ratio))
+        next_ratio = -2.0 + ((i  + 1) / (total_cells - 1)) * 4.0 if i < total_cells - 1 else ratio
+        
+        cell_char = cell_color(ratio)
+        
+        is_neg_bound = (ratio <= NEARING_BAND_FRACTION < next_ratio)
+        is_pos_bound = (ratio <= NEARING_BAND_FRACTION < next_ratio) or (i == total_cells - 1 and ratio >= NEARING_BAND_FRACTION)
+        
+        if is_neg_bound or is_pos_bound:
+            cell_char = "|"
+        
+        bar.append(cell_char)
         
     clamped = max(-2.0, min(2.0, signed_frac))
     idx = round((clamped + 2.0) / (4.0) * len(bar) - 1)
