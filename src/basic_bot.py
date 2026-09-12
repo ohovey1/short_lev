@@ -872,7 +872,7 @@ def _band_bar(signed_frac, n_cells=8, defining_band=0.75):
     separator = "┃"  
     bar.insert(11, separator)
     bar.insert(5, separator)
-    bar.insert(6, separator)
+    bar.insert(7, separator)
     bar.insert(12, separator)
     
     max_val = n_cells * step
