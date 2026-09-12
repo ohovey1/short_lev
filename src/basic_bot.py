@@ -843,7 +843,7 @@ def _handle_shares_report(ib, args, state):
             
     return "\n".join(lines) if lines else "No pairs have shares set."
 
-def _band_bar(signed_frac, n_cells=8, overshoot=1.2):
+def _band_bar(signed_frac, n_cells=8, step=0.25):
     """
     2*n_cells emoji moji gauge of a signed value/band ratio.
     signed_frac: value / band_threshold, signed. +-1 = trip line.
@@ -851,51 +851,40 @@ def _band_bar(signed_frac, n_cells=8, overshoot=1.2):
     trip -> orange, near --> yellow, safe --> geen or blue
     Negative means drifted short/under, while positive is long/over.
     """
-    SAFE_COLORS = ["🟩", "🟦"] # 0 -> NEARING_BAND_FRACTION
-    NEAR_COLORS = ["🟨"] # NEARING_BAND_FRACTION -> 1.0 (the line)
-    TRIP_COLORS = ["🟧"] #  "🟪"]
+    half = []
     
-    def cell_color(ratio):
-        abs_ratio = abs(ratio)
-        level = _alert_level(abs_ratio, 1.0)
-        if level is None:
-            zone_pos = abs_ratio / NEARING_BAND_FRACTION if NEARING_BAND_FRACTION else 0
-            i = min(len(SAFE_COLORS) - 1, int(zone_pos * len(SAFE_COLORS)))
-            return SAFE_COLORS[i]
-        if level == "near":
-            zone_pos = (abs_ratio - NEARING_BAND_FRACTION) / (1.0 - NEARING_BAND_FRACTION)
-            i = min(len(NEAR_COLORS) - 1, int(zone_pos * len(NEAR_COLORS)))
-            return NEAR_COLORS[i]
-        zone_pos = abs_ratio - 1.0
-        i = min(len(TRIP_COLORS) - 1, int(zone_pos * len(TRIP_COLORS)))
-        return TRIP_COLORS[i]
-              
-    half = [cell_color(i / (n_cells - 1) * 2.0) for i in range(n_cells)]     
-    bar = half[::-1]  + half # bar and in reverse
-
-    total_cells = n_cells * 2
+    for c in range(n_cells):
+        cell_val = (c + 0.5) * step
+        
+        if cell_val <= 0.25:
+            half.append("🟩")
+        elif cell_val <= 0.50:
+            half.append("🟦")
+        elif cell_val <= 0.75:
+            half.append("🟨")
+        else:
+            half.append("🟧")
+            
+    bar = half[::-1] + half
     
-    bar = []
-    for i in range(total_cells):
-        # Maps i from 0 into a range of -2.0 to +2.0
-        ratio = -2.0 + (i / (total_cells - 1)) * 4.0
-        next_ratio = -2.0 + ((i  + 1) / (total_cells - 1)) * 4.0 if i < total_cells - 1 else ratio
+    separator = "┃"  
+    bar.insert(12, separator)
+    bar.insert(4, separator)
+    bar.insert(3, separator)
+    bar.insert(13, separator)
+    
+    max_val = n_cells * step
+    clamped = max(-max_val, min(max_val, signed_frac))
+    
+    idx_mapped = round((clamped + max_val) / (max_val * 2) * (len(bar) - 1))
+    
+    if bar[idx_mapped] == separator:
+        idx_mapped = idx_mapped + 1 if signed_frac >= 0 else idx_mapped - 1
         
-        cell_char = cell_color(ratio)
-        
-        is_neg_bound = (ratio <= LONG_SHORT_BAND < next_ratio)
-        is_pos_bound = (ratio <= LONG_SHORT_BAND < next_ratio) or (i == total_cells - 1 and ratio >= LONG_SHORT_BAND)
-        
-        if is_neg_bound or is_pos_bound:
-            cell_char = "|"
-        
-        bar.append(cell_char)
-        
-    clamped = max(-2.0, min(2.0, signed_frac))
-    idx = round((clamped + 2.0) / (4.0) * len(bar) - 1)
-    bar[idx] = "✴️" if abs(signed_frac) >= 1.0 else "✳️"
+    bar[idx_mapped] = "✴️" if abs(signed_frac) >= 1.0 else "✳️"
     
     return "".join(bar)
+    
     
 def connect_with_backoff(backoff=RECONNECT_BACKOFF_START):
     """
