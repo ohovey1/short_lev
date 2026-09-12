@@ -843,7 +843,7 @@ def _handle_shares_report(ib, args, state):
             
     return "\n".join(lines) if lines else "No pairs have shares set."
 
-def _band_bar(signed_frac, n_cells=8, defining_band=0.75):
+def _band_bar(signed_frac, n_cells=6, defining_band=0.75):
     """
     2*n_cells emoji moji gauge of a signed value/band ratio.
     signed_frac: value / band_threshold, signed. +-1 = trip line.
@@ -870,10 +870,15 @@ def _band_bar(signed_frac, n_cells=8, defining_band=0.75):
     bar = half[::-1] + half
     
     separator = "┃"  
-    bar.insert(11, separator)
-    bar.insert(5, separator)
-    bar.insert(7, separator)
-    bar.insert(12, separator)
+    #bar.insert(3, separator)
+    #bar.insert(5, separator)
+    #bar.insert(10, separator)
+    #bar.insert(12, separator)
+    
+    bar.insert(9, separator)
+    bar.insert(8, separator)
+    bar.insert(4, separator)
+    bar.insert(3, separator)
     
     max_val = n_cells * step
     clamped = max(-max_val, min(max_val, signed_frac))
