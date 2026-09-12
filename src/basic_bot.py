@@ -842,8 +842,8 @@ def _handle_rescale(ib, args, state):
     lines = [f"{pair_key}: scaled {scale_factor:.3f}x (short leg {old_short:,.0f} --> {new_short:,.0f})",
              f"Target scaled to match: ${old_target:,.2f} --> ${new_target:,.2f} "
              f"Base capital: ${base_capital:,.2f} --> ${new_base_capital:,.2f}",
-             f"Long-short = {abs(net_delta) / new_target:.1%} off target band"
-             "FOIL decay = {abs(short_notional - new_target) / new_target:.1%} off target."]
+             f"Long-short = {abs(net_delta) / new_target:.1%} off target band\n"
+             f"FOIL decay = {abs(short_notional - new_target) / new_target:.1%} off target."]
     
     if old_long:
         long_scale_factor = new_long / old_long
