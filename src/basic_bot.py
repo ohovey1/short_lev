@@ -447,6 +447,176 @@ def build_calc_reply(ib, args, state):
         e(f"{abs(net_delta) / target:.1%} off target."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
+        "*" + e("TRIPS") + "*",
+    ]
+ 
+    if abs(short_notional - target) > FOIL_DECAY_BAND * target:
+        lines.append(e(
+            f"TRIP: FOIL decay band -- short notional is "
+            f"{abs(short_notional - target) / target:.1%} off target.\n"
+            "To get specific options for action to take: run /calcaction\n"
+        ))
+    elif abs(net_delta) > LONG_SHORT_BAND * target:
+        lines.append(e(
+            f"TRIP: long-short band -- net delta is "
+            f"{abs(net_delta) / target:.1%} off target.\n"
+            "To get specific options for action to take: run /calcaction\n"
+        ))
+    else:
+        lines.append(e("No trip -- current shares are both within bands."))
+    
+    """
+    lines.append(e(
+        "\n(Only foil-decay and long-short are checked here. Drawdown stop and "
+        "margin de-risk both need a live position's persisted peak_equity / "
+        "actual maintenance margin, which this what-if calculator has no reason to hold.)"
+    ))"""
+ 
+    return "\n".join(lines)
+
+USAGE = (
+    "Usage: /calc SHORT_TICKER LONG_TICKER LEVERAGE SHARES_SHORT SHARES_LONG [BASE_CAPITAL]\n"
+    "Shorthand for existing position: /calc PAIR_KEY -- uses stored shares & target if already"
+    "tracked (e.g. /calc TQQQ\n"
+    "Example (from existing long position): /calc TSLL TSLA 2 100 250\n"
+    "Example (from existing short position): /calc TSLL TSLA 2 100 0\n"
+    "Example (if no long position yet): /calc TSLL TSLA 2 0 0 10000\n"
+    "BASE_CAPITAL is required when both share counts are 0 - -- otherwise derived from"
+    "whichever leg is currently held."
+    "Does not return 'Action to Take' or foil-decay band. Use /calcfull to get these."
+)
+
+def build_calcaction_reply(ib, args, state):
+    """Args in, reply text out. Pure given the ib price lookups."""
+    e = notify.escape_md_v2
+    
+    # todo
+    # branch for existing tracked positions
+    if len(args) == 1:
+        pair_key = args[0].upper()
+        if pair_key not in config.PAIRS:
+            return e(f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}")
+        entry = state["pairs"].get(pair_key)
+        ss = entry.get("shares_short") if entry else None
+        sl = entry.get("shares_long") if entry else None
+        bc = entry.get("base_capital") if entry else None
+        if ss is None or sl is None or bc is None:
+            return e(f"{pair_key} isn't being tracked yet -- use /setshares "
+                     f"first, or give full /calc args.")
+        if ss == 0 and sl == 0:
+            return e(f"{pair_key} is paused (0/0) -- use /resize to set numbers "
+                     f"first, or give full /calc args.")
+        pair = config.PAIRS[pair_key]
+        args = [pair["leveraged_ticker"], pair["underlying_ticker"], str(pair["leverage"]),
+                str(ss), str(sl), str(bc)]
+    
+    if len(args) not in (5, 6):
+        return e(USAGE)
+ 
+    short_ticker, long_ticker, leverage_s, shares_short_s, shares_long_s = args[:5]
+    base_capital_s = args[5] if len(args) == 6 else None
+ 
+    try:
+        leverage_in = float(leverage_s)
+        shares_short = float(shares_short_s)
+        shares_long = float(shares_long_s)
+        base_capital = float(base_capital_s) if base_capital_s is not None else None
+    except ValueError:
+        return e("Leverage, shares, and base_capital must all be numbers.\n\n") + e(USAGE)
+    
+    if base_capital is None and shares_long == 0 and shares_short == 0:
+        return (e("BASE_CAPITAL is required when both share coutns are 0 --"
+                "there's no held position to derive it from.\n\n") + e(USAGE))
+ 
+    price_short = _price(ib, short_ticker)
+    price_long = _price(ib, long_ticker)
+    if price_short is None or price_long is None:
+        missing = []
+        if price_short is None:
+            missing.append(short_ticker.upper())
+        if price_long is None:
+            missing.append(long_ticker.upper())
+        return (e(f"Could not get a live price for: {', '.join(missing)}. ") + 
+                e("Check the symbol(s) and try again."))
+ 
+    long_rate, short_rate, leverage, rate_source = _rates_for(short_ticker, leverage_in)
+    margin_mult = long_rate * leverage + short_rate
+ 
+    short_notional = shares_short * price_short
+    long_notional = shares_long * price_long
+    
+    derived_from = None # None, long, or short
+    
+    if base_capital is None:
+        if shares_long != 0:
+            derived_from = "long"
+            target_for_derivation = long_notional / leverage
+        else:
+            derived_from = "short"
+            target_for_derivation = short_notional        
+        base_capital = target_for_derivation * margin_mult / config.DEFAULT_CAPITAL_UTILIZATION
+        
+    target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
+    twice_base = leverage * short_notional
+    net_delta = long_notional - leverage * short_notional
+ 
+    lines = [
+        "*" + e(f"CURRENT PRICES FOR {short_ticker.upper()} & {long_ticker.upper()}") + "*",
+        e(f"{long_ticker.upper()} (long)  @ ${price_long:,.2f} x {shares_long:,.0f} sh "
+          f"= ${long_notional:,.2f}"),
+        e(f"{short_ticker.upper()} (short) @ ${price_short:,.2f} x {shares_short:,.0f} sh "
+          f"= ${short_notional:,.2f}"),
+        # "",
+        # e(f"Leverage: {leverage:g}"),
+        # e(f"Margin multiplier: {margin_mult:.3f} (long rate={long_rate:.2f}, short rate={short_rate:.2f})"),
+        # e(f"Rates source: {rate_source}"),
+        "",
+        "*" + e("TARGET PARAMETERS") + "*",
+        e(f"Leverage {leverage:g} * {short_ticker.upper()} ${short_notional:,.2f} = "),
+        "*" + e(f"${twice_base:,.2f}\n") + "*",
+        e("Net distance limit = "),
+        e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
+          f"short ${short_notional:,.2f}"),
+        "*" + e(f"= ${net_delta:,.2f}") + "*",
+        ]
+    if derived_from == "long":
+        lines.append(
+            e(f"base_capital not given -- derived as ${base_capital:,.2f} from "
+              f"the long leg (${long_notional:,.2f} invested, assuming the book "
+              "is balanced at target."),
+        )
+        lines.append("")
+    elif derived_from == "short":
+        lines.append(
+            e(f"base_capital not given -- derived as ${base_capital:,.2f} from "
+              f"the short leg (${short_notional:,.2f} held, treated as sitting "
+              "exactly on target."),
+        )
+        lines.append("")
+        
+    # signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
+    signed_ls = net_delta / target / LONG_SHORT_BAND
+     
+    lines += [
+        # e(f"target (short) = base_capital ${base_capital:,.2f} x "),
+        # e(f"capital_utilization {config.DEFAULT_CAPITAL_UTILIZATION:.0%} / "),
+        # e(f"margin_multiplier {margin_mult:.3f}"),
+        # e(f"= {target:,.2f}"),
+        # "",
+        # e("Net distance limit = "),
+        #  e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
+        #   f"short ${short_notional:,.2f}"),
+        # e(f"= ${net_delta:,.2f}"),
+        "",
+        # e(f"bands: long_short={LONG_SHORT_BAND:.2%}  "
+        #  f"FOIL_decay={FOIL_DECAY_BAND:.2%}"),
+        # e(f"FOIL decay: {_band_bar(signed_foil)}"),
+        # e(f"{abs(short_notional - target) / target:.1%} off target."),
+        # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
+        e(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}"),
+        e(f"{abs(net_delta) / target:.1%} off target."),
+        # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
+        "",
         "*" + e("ACTION TO TAKE") + "*",
     ]
  
@@ -1057,6 +1227,8 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
         reply = notify.escape_md_v2(reply)    
     elif command == "/calcfull":
         reply = build_calcfull_reply(ib, args, state)
+    elif command == "/calcaction":
+        reply = build_calcaction_reply(ib, args, state)
     elif command == "/rescale":
         reply = _handle_rescale(ib, args, state)
         reply = notify.escape_md_v2(reply)    
