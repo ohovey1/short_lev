@@ -454,13 +454,13 @@ def build_calc_reply(ib, args, state):
         lines.append(e(
             f"TRIP: FOIL decay band -- short notional is "
             f"{abs(short_notional - target) / target:.1%} off target.\n"
-            "To get specific options for action to take: run /calcaction\n"
+            "To get specific options for action to take: run /calcaction or /calcfull\n"
         ))
     elif abs(net_delta) > LONG_SHORT_BAND * target:
         lines.append(e(
             f"TRIP: long-short band -- net delta is "
             f"{abs(net_delta) / target:.1%} off target.\n"
-            "To get specific options for action to take: run /calcaction\n"
+            "To get specific options for action to take: run /calcaction or /calcfull\n"
         ))
     else:
         lines.append(e("No trip -- current shares are both within bands."))
