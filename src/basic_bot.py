@@ -233,7 +233,7 @@ def build_calcfull_reply(ib, args, state):
         lines.append("")
         
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / target / LONG_SHORT_BAND
+    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
      
     lines += [
         # e(f"target (short) = base_capital ${base_capital:,.2f} x "),
@@ -249,7 +249,7 @@ def build_calcfull_reply(ib, args, state):
         e(f"bands: long_short={LONG_SHORT_BAND:.2%}  "
           f"FOIL_decay={FOIL_DECAY_BAND:.2%}"),
         e(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}"),
-        e(f"{abs(net_delta) / target:.1%} off target."),
+        e(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         e(f"FOIL decay: {_band_bar(signed_foil, defining_band=FOIL_DECAY_BAND*10)}"),
         e(f"{abs(short_notional - target) / target:.1%} off target."),
@@ -281,12 +281,12 @@ def build_calcfull_reply(ib, args, state):
             f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares_alt:,d} sh\n"
             f"    Target resized to match long leg: ${target:,.0f} -> ${new_target_long:,.0f}"
         ))
-    elif abs(net_delta) > LONG_SHORT_BAND * target:
+    elif abs(net_delta) > LONG_SHORT_BAND * leverage * target:
         new_long_shares = round((leverage * short_notional) / price_long)
         new_short_shares_alt = round(long_notional / (leverage * price_short))
         lines.append(e(
             f"TRIP: long-short band -- net delta is "
-            f"{abs(net_delta) / target:.1%} off target.\n"
+            f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.\n"
             f"  Option A: Short leg unchanged. Resize long leg only:\n"
             f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares:,d} sh\n"
             f"  Option B: Long leg unchanged. Resize short leg only:\n"
@@ -425,7 +425,7 @@ def build_calc_reply(ib, args, state):
         lines.append("")
         
     # signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / target / LONG_SHORT_BAND
+    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
      
     lines += [
         # e(f"target (short) = base_capital ${base_capital:,.2f} x "),
@@ -444,7 +444,7 @@ def build_calc_reply(ib, args, state):
         # e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
         e(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}"),
-        e(f"{abs(net_delta) / target:.1%} off target."),
+        e(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
         "*" + e("TRIPS") + "*",
@@ -456,10 +456,10 @@ def build_calc_reply(ib, args, state):
             f"{abs(short_notional - target) / target:.1%} off target.\n"
             "To get specific options for action to take: run /calcaction or /calcfull\n"
         ))
-    elif abs(net_delta) > LONG_SHORT_BAND * target:
+    elif abs(net_delta) > LONG_SHORT_BAND * leverage * target:
         lines.append(e(
             f"TRIP: long-short band -- net delta is "
-            f"{abs(net_delta) / target:.1%} off target.\n"
+            f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.\n"
             "To get specific options for action to take: run /calcaction or /calcfull\n"
         ))
     else:
@@ -595,7 +595,7 @@ def build_calcaction_reply(ib, args, state):
         lines.append("")
         
     # signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / target / LONG_SHORT_BAND
+    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
      
     lines += [
         # e(f"target (short) = base_capital ${base_capital:,.2f} x "),
@@ -614,7 +614,7 @@ def build_calcaction_reply(ib, args, state):
         # e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
         e(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}"),
-        e(f"{abs(net_delta) / target:.1%} off target."),
+        e(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
         "*" + e("ACTION TO TAKE") + "*",
@@ -643,12 +643,12 @@ def build_calcaction_reply(ib, args, state):
             f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares_alt:,d} sh\n"
             f"    Target resized to match long leg: ${target:,.0f} -> ${new_target_long:,.0f}"
         ))
-    elif abs(net_delta) > LONG_SHORT_BAND * target:
+    elif abs(net_delta) > LONG_SHORT_BAND * leverage * target:
         new_long_shares = round((leverage * short_notional) / price_long)
         new_short_shares_alt = round(long_notional / (leverage * price_short))
         lines.append(e(
             f"TRIP: long-short band -- net delta is "
-            f"{abs(net_delta) / target:.1%} off target.\n"
+            f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.\n"
             f"  Option A: Short leg unchanged. Resize long leg only:\n"
             f"    {long_ticker.upper()}: {shares_long:,.0f} -> {new_long_shares:,d} sh\n"
             f"  Option B: Long leg unchanged. Resize short leg only:\n"
@@ -699,7 +699,7 @@ def _pair_reading(ib, pair_key, entry):
     return {
         "target": target,
         "foil_frac": abs(short_notional - target) / target,
-        "long_short_frac": abs(net_delta) / target
+        "long_short_frac": abs(net_delta) / (pair["leverage"] * target)
     }
 
 def _alert_level(frac, band):
@@ -829,7 +829,7 @@ def _handle_setshares(ib, args, state):
     base_capital = short_notional * margin_mult / config.DEFAULT_CAPITAL_UTILIZATION
     target = short_notional
     net_delta = long_notional - pair["leverage"] * short_notional
-    long_short_frac = abs(net_delta) / target
+    long_short_frac = abs(net_delta) / (pair["leverage"] * target)
     
     entry = watch_state.pair_entry(state, pair_key)
     entry["shares_short"] = shares_short
@@ -852,10 +852,10 @@ def _handle_setshares(ib, args, state):
         )
         
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / target / LONG_SHORT_BAND
+    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
     
     lines.append(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}")
-    lines.append(f"{abs(net_delta) / target:.1%} off target.")
+    lines.append(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
     # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
     lines.append(f"FOIL decay: {_band_bar(signed_foil, defining_band=FOIL_DECAY_BAND*10)}")
     lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
@@ -913,7 +913,7 @@ def _handle_resize(ib, args, state):
     long_notional = shares_long * price_long
     net_delta = long_notional - pair["leverage"] * short_notional
     foil_frac = abs(short_notional - target) / target
-    long_short_frac = abs(net_delta) / target
+    long_short_frac = abs(net_delta) / (pair["leverage"] * target)
     
     entry["shares_short"] = shares_short
     entry["shares_long"] = shares_long
@@ -934,10 +934,10 @@ def _handle_resize(ib, args, state):
         )
         
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / target / LONG_SHORT_BAND
+    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
     
     lines.append(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}")
-    lines.append(f"{abs(net_delta) / target:.1%} off target.")
+    lines.append(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
     # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
     lines.append(f"FOIL decay: {_band_bar(signed_foil, defining_band=FOIL_DECAY_BAND*10)}")
     lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
@@ -1001,7 +1001,7 @@ def _handle_rescale(ib, args, state):
     net_delta = long_notional - pair["leverage"] * short_notional
     
     foil_frac = abs(short_notional - new_target) / new_target
-    long_short_frac = abs(net_delta) / new_target
+    long_short_frac = abs(net_delta) / (pair["leverage"] * new_target)
     
     entry["shares_short"] = new_short
     entry["shares_long"] = new_long
@@ -1012,7 +1012,7 @@ def _handle_rescale(ib, args, state):
     lines = [f"{pair_key}: scaled {scale_factor:.3f}x (short leg {old_short:,.0f} --> {new_short:,.0f})",
              f"Target scaled to match: ${old_target:,.2f} --> ${new_target:,.2f} "
              f"Base capital: ${base_capital:,.2f} --> ${new_base_capital:,.2f}",
-             f"Long-short = {abs(net_delta) / new_target:.1%} off target band\n"
+             f"Long-short = {abs(net_delta) / (pair['leverage'] * new_target):.1%} off target band\n"
              f"FOIL decay = {abs(short_notional - new_target) / new_target:.1%} off target."]
     
     if old_long:
@@ -1079,7 +1079,7 @@ def _handle_shares_report(ib, args, state):
             net_delta = long_notional - pair["leverage"] * short_notional
             
             signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-            signed_ls = net_delta / target / LONG_SHORT_BAND
+            signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
             
             lines.append(
                 f"{k}: short {e['shares_short']:,.0f} / long {e['shares_long']:,.0f} "
@@ -1087,7 +1087,7 @@ def _handle_shares_report(ib, args, state):
             )
             
             lines.append(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}")
-            lines.append(f"{abs(net_delta) / target:.1%} off target.")
+            lines.append(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
             # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
             lines.append(f"FOIL decay: {_band_bar(signed_foil, defining_band=FOIL_DECAY_BAND*10)}")
             lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
