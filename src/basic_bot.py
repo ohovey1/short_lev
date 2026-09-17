@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 from ib_async import IB, Stock
  
 import config
+# import config_detailed
 import notify
 import asyncio
 
@@ -1193,7 +1194,38 @@ def get_updates(token, offset):
     if resp.status_code != 200 or not body.get("ok"):
         raise RuntimeError(f"getUpdates HTTP {resp.status_code}: {resp.text[:200]}")
     return body.get("result", [])
- 
+
+_NOT_REPEATABLE = {"/previous"}
+
+def _dispatch_command(ib, command, args, state):
+    if command == "/calc":
+        return  build_calc_reply(ib, args, state)
+    elif command == "/setshares":
+        reply = _handle_setshares(ib, args, state)
+        return notify.escape_md_v2(reply)
+    elif command == "/resize":
+        reply = _handle_resize(ib, args, state)
+        return notify.escape_md_v2(reply)
+    elif command == "/shares":
+        reply = _handle_shares_report(ib, args, state)
+        return notify.escape_md_v2(reply)
+    elif command == "/listshares":
+        reply = _handle_listshares(state)
+        return notify.escape_md_v2(reply)
+    elif command == "/untrack":
+        reply = _handle_untrack(args, state)
+        return notify.escape_md_v2(reply)    
+    elif command == "/calcfull":
+        return build_calcfull_reply(ib, args, state)
+    elif command == "/calcaction":
+        return build_calcaction_reply(ib, args, state)
+    elif command == "/rescale":
+        reply = _handle_rescale(ib, args, state)
+        return notify.escape_md_v2(reply)    
+    # else:
+        # log.info("Unknown command %s from chat %s", command, chat_id)
+        # return # unknown command
+    return None
  
 def handle_message(ib, message, token, configured_chat_id, state): # todo
     text = (message.get("text") or "").strip()
@@ -1213,35 +1245,26 @@ def handle_message(ib, message, token, configured_chat_id, state): # todo
     
     command = text.split()[0].split("@")[0].lower()
     args = text.split()[1:]
-       
-    if command == "/calc":
-        reply = build_calc_reply(ib, args, state)
-    elif command == "/setshares":
-        reply = _handle_setshares(ib, args, state)
-        reply = notify.escape_md_v2(reply)
-    elif command == "/resize":
-        reply = _handle_resize(ib, args, state)
-        reply = notify.escape_md_v2(reply)
-    elif command == "/shares":
-        reply = _handle_shares_report(ib, args, state)
-        reply = notify.escape_md_v2(reply)
-    elif command == "/listshares":
-        reply = _handle_listshares(state)
-        reply = notify.escape_md_v2(reply)
-    elif command == "/untrack":
-        reply = _handle_untrack(args, state)
-        reply = notify.escape_md_v2(reply)    
-    elif command == "/calcfull":
-        reply = build_calcfull_reply(ib, args, state)
-    elif command == "/calcaction":
-        reply = build_calcaction_reply(ib, args, state)
-    elif command == "/rescale":
-        reply = _handle_rescale(ib, args, state)
-        reply = notify.escape_md_v2(reply)    
-    else:
+    
+    if command == "/previous":
+        previous = state.get("last_command")
+        if not previous:
+            reply = notify.escape_md_v2("No previous command to repeat yet.")
+            delivered, error, _ = notify.send_text(token, configured_chat_id, reply)    
+            if not delivered:
+                log.warning("reply to %s failed: %s", command, error)
+            return
+        command = previous["command"]
+        args = previous["args"]
+        log.info("/previous replaying: %s %s", command, " ".join(args))
+    
+    reply = _dispatch_command(ib, command, args, state)
+    if reply is None:
         log.info("Unknown command %s from chat %s", command, chat_id)
         return # unknown command
-
+    
+    if command not in _NOT_REPEATABLE:
+        state["last_command"] = {"command": command, "args": args}
             
     delivered, error, _ = notify.send_text(token, configured_chat_id, reply)    
     if not delivered:
