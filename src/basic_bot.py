@@ -19,7 +19,7 @@ Uses same gateway, with own clientId
 
 In Telegram:
     /calc SHORT_TICKER LONG_TICKER LEVERAGE SHARES_SHORT SHARES_LONG BASE_CAPITAL
-    /calc TSLL TSLA 2 100 250 10000
+    /calc TSLT TSLA 2 100 250 10000
 """
 
 import logging
@@ -29,8 +29,8 @@ import time
 from dotenv import load_dotenv
 from ib_async import IB, Stock
  
-import config
-# import config_detailed
+# import config
+import config_detailed as config
 import notify
 import asyncio
 
@@ -88,9 +88,12 @@ def _time_env(name, default_hour, default_minute):
 MORNING_HOUR, MORNING_MINUTE = _time_env("WATCHING_MORNING_HOUR", 9, 30)
 EOD_HOUR, EOD_MINUTE = _time_env("WATCH_EOD_HOUR", 15, 55)
 
- 
+_BY_LEVERAGED = {pair["leveraged_ticker"].upper(): pair for pair in config.PAIRS.values()}
+_KEY_BY_LEVERAGED = {pair["leveraged_ticker"].upper(): k for k, pair in config.PAIRS.items()}
+
+# todo edited 
 def _rates_for(short_ticker, leverage):
-    pair = config.PAIRS.get(short_ticker.upper())
+    pair = _BY_LEVERAGED.get(short_ticker.upper())
     if pair:
         return pair["long_rate"], pair["short_rate"], pair["leverage"], "config.PAIRS (IBKR-observed)"
     return (REG_T_LONG_RATE, REG_T_SHORT_RATE_PER_LEVERAGE * leverage, leverage,
@@ -125,6 +128,14 @@ def _price(ib, ticker):
         return None
     return price
 
+def _resolve_pair_key(raw):
+    """Accept both underlying and leveraged ticker and return config.PAIRS key.
+    Or None if neither matches."""
+    key = raw.upper()
+    if key in config.PAIRS:
+        return key
+    return _KEY_BY_LEVERAGED.get(key)
+
 def build_calcfull_reply(ib, args, state):
     """Args in, reply text out. Pure given the ib price lookups."""
     e = notify.escape_md_v2
@@ -132,9 +143,11 @@ def build_calcfull_reply(ib, args, state):
     # todo
     # branch for existing tracked positions
     if len(args) == 1:
-        pair_key = args[0].upper()
-        if pair_key not in config.PAIRS:
-            return e(f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}")
+        pair_key_raw = args[0].upper()
+        pair_key = _resolve_pair_key(pair_key_raw)
+        # if pair_key not in config.PAIRS:
+        if pair_key is None:
+            return e(f"Unknown pair {pair_key}.upper(). Configured pairs (by underlying): {', '.join(config.PAIRS)}")
         entry = state["pairs"].get(pair_key)
         ss = entry.get("shares_short") if entry else None
         sl = entry.get("shares_long") if entry else None
@@ -316,10 +329,10 @@ def build_calcfull_reply(ib, args, state):
 USAGE = (
     "Usage: /calc SHORT_TICKER LONG_TICKER LEVERAGE SHARES_SHORT SHARES_LONG [BASE_CAPITAL]\n"
     "Shorthand for existing position: /calc PAIR_KEY -- uses stored shares & target if already"
-    "tracked (e.g. /calc TQQQ\n"
-    "Example (from existing long position): /calc TSLL TSLA 2 100 250\n"
-    "Example (from existing short position): /calc TSLL TSLA 2 100 0\n"
-    "Example (if no long position yet): /calc TSLL TSLA 2 0 0 10000\n"
+    "tracked (e.g. /calc TSLA\n"
+    "Example (from existing long position): /calc TSLT TSLA 2 100 250\n"
+    "Example (from existing short position): /calc TSLT TSLA 2 100 0\n"
+    "Example (if no long position yet): /calc TSLT TSLA 2 0 0 10000\n"
     "BASE_CAPITAL is required when both share counts are 0 - -- otherwise derived from"
     "whichever leg is currently held."
     "Does not return 'Action to Take' or foil-decay band. Use /calcfull to get these."
@@ -332,9 +345,10 @@ def build_calc_reply(ib, args, state):
     # todo
     # branch for existing tracked positions
     if len(args) == 1:
-        pair_key = args[0].upper()
-        if pair_key not in config.PAIRS:
-            return e(f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}")
+        pair_key_raw = args[0].upper()
+        pair_key = _resolve_pair_key(pair_key_raw)
+        if pair_key is None:
+            return e(f"Unknown pair {pair_key}. Configured pairs (by underlying): {', '.join(config.PAIRS)}")
         entry = state["pairs"].get(pair_key)
         ss = entry.get("shares_short") if entry else None
         sl = entry.get("shares_long") if entry else None
@@ -491,10 +505,10 @@ def build_calc_reply(ib, args, state):
 USAGE = (
     "Usage: /calc SHORT_TICKER LONG_TICKER LEVERAGE SHARES_SHORT SHARES_LONG [BASE_CAPITAL]\n"
     "Shorthand for existing position: /calc PAIR_KEY -- uses stored shares & target if already"
-    "tracked (e.g. /calc TQQQ\n"
-    "Example (from existing long position): /calc TSLL TSLA 2 100 250\n"
-    "Example (from existing short position): /calc TSLL TSLA 2 100 0\n"
-    "Example (if no long position yet): /calc TSLL TSLA 2 0 0 10000\n"
+    "tracked (e.g. /calc TSLA\n"
+    "Example (from existing long position): /calc TSLT TSLA 2 100 250\n"
+    "Example (from existing short position): /calc TSLT TSLA 2 100 0\n"
+    "Example (if no long position yet): /calc TSLT TSLA 2 0 0 10000\n"
     "BASE_CAPITAL is required when both share counts are 0 - -- otherwise derived from"
     "whichever leg is currently held."
     "Does not return 'Action to Take' or foil-decay band. Use /calcfull to get these."
@@ -507,9 +521,11 @@ def build_calcaction_reply(ib, args, state):
     # todo
     # branch for existing tracked positions
     if len(args) == 1:
-        pair_key = args[0].upper()
-        if pair_key not in config.PAIRS:
-            return e(f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}")
+        pair_key_raw = args[0].upper()
+        pair_key = _resolve_pair_key(pair_key_raw)
+        # if pair_key not in config.PAIRS:
+        if pair_key is None:
+            return e(f"Unknown pair {pair_key}.upper(). Configured pairs (by underlying): {', '.join(config.PAIRS)}")
         entry = state["pairs"].get(pair_key)
         ss = entry.get("shares_short") if entry else None
         sl = entry.get("shares_long") if entry else None
@@ -818,14 +834,16 @@ def _run_heartbeat_if_due(state, send):
 def _handle_setshares(ib, args, state):
     if len(args) != 3:
         return ("Usage: /setshares PAIR_KEY SHARES_SHORT SHARES_LONG\n"
-                "Example: /setshares TSLL 100 250\n"
+                "Example: /setshares TSLT 100 250\n"
                 "Base capital is back-solved from current price, assuming short"
                 "leg is where you want it now.")
     
-    pair_key, shares_short_s, shares_long_s = args
-    pair_key = pair_key.upper()
-    if pair_key not in config.PAIRS:
-        return f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}"
+    pair_key_raw, shares_short_s, shares_long_s = args
+    pair_key_raw = pair_key_raw.upper()
+    pair_key = _resolve_pair_key(pair_key_raw)
+    # if pair_key not in config.PAIRS:
+    if pair_key is None:
+        return f"Unknown pair {pair_key}.upper(). Configured pairs (by underlying): {', '.join(config.PAIRS)}"
     try:
         shares_short = float(shares_short_s)
         shares_long = float(shares_long_s)
@@ -896,10 +914,12 @@ def _handle_resize(ib, args, state):
                 "Use /setshares instead if you want to restart position, or"
                 "/untrack to forget it.")
     
-    pair_key, shares_short_s, shares_long_s = args
-    pair_key = pair_key.upper()
-    if pair_key not in config.PAIRS:
-        return f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}"
+    pair_key_raw, shares_short_s, shares_long_s = args
+    pair_key_raw = pair_key_raw.upper()
+    pair_key = _resolve_pair_key(pair_key_raw)
+    # if pair_key not in config.PAIRS:
+    if pair_key is None:
+        return f"Unknown pair {pair_key}.upper(). Configured pairs (by underlying): {', '.join(config.PAIRS)}"
     
     entry = watch_state.pair_entry(state, pair_key)
     base_capital = entry.get("base_capital")
@@ -983,10 +1003,12 @@ def _handle_rescale(ib, args, state):
                 "Use /resize to correct toward existing target or /setshares to "
                 "recenter the target at a new position.")
     
-    pair_key, shares_short_s, shares_long_s = args
-    pair_key = pair_key.upper()
-    if pair_key not in config.PAIRS:
-        return f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}"
+    pair_key_raw, shares_short_s, shares_long_s = args
+    pair_key_raw = pair_key_raw.upper()
+    pair_key = _resolve_pair_key(pair_key_raw)
+    # if pair_key not in config.PAIRS:
+    if pair_key is None:
+        return f"Unknown pair {pair_key}.upper(). Configured pairs (by underlying): {', '.join(config.PAIRS)}"
     
     entry = watch_state.pair_entry(state, pair_key)
     old_short = entry.get("shares_short")
@@ -1059,10 +1081,12 @@ def _handle_rescale(ib, args, state):
 def _handle_untrack(args, state):
     if len(args) != 1:
         return "Usage: /untrack PAIR_KEY\nExample: /untrack TQQQ"
-    pair_key = args[0].upper()
+    pair_key_raw = args[0].upper()
     
-    if pair_key not in config. PAIRS:
-        return f"Unknown pair {pair_key}. Configured pairs: {', '.join(config.PAIRS)}"
+    pair_key = _resolve_pair_key(pair_key_raw)
+    # if pair_key not in config.PAIRS:
+    if pair_key is None:
+        return f"Unknown pair {pair_key}.upper(). Configured pairs (by underlying): {', '.join(config.PAIRS)}"
     entry = state["pairs"].pop(pair_key, None)
     if entry is None:
         return f"{pair_key} wasn't being tracked."
