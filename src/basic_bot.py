@@ -197,6 +197,7 @@ def build_calcfull_reply(ib, args, state):
     target = (base_capital * config.DEFAULT_CAPITAL_UTILIZATION) / margin_mult
     twice_base = leverage * short_notional
     net_delta = long_notional - leverage * short_notional
+    long_or_short = "long 🟢" if net_delta > 0 else "short 🔴"
  
     lines = [
         "*" + e(f"CURRENT PRICES FOR {short_ticker.upper()} & {long_ticker.upper()}") + "*",
@@ -216,6 +217,7 @@ def build_calcfull_reply(ib, args, state):
         e(f"long ${long_notional:,.2f} - leverage {leverage:g} x "
           f"short ${short_notional:,.2f}"),
         "*" + e(f"= ${net_delta:,.2f}") + "*",
+        e(f"Position is {long_or_short}")
         ]
     if derived_from == "long":
         lines.append(
