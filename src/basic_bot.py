@@ -237,6 +237,9 @@ def build_calcfull_reply(ib, args, state):
         
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
     signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
+    
+    ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
+    foil_direction = "long ➡️🟢" if signed_foil > 0 else "short ⬅️🔴"
      
     lines += [
         # e(f"target (short) = base_capital ${base_capital:,.2f} x "),
@@ -251,11 +254,13 @@ def build_calcfull_reply(ib, args, state):
         "",
         e(f"bands: long_short={LONG_SHORT_BAND:.2%}  "
           f"FOIL_decay={FOIL_DECAY_BAND:.2%}"),
-        e(f"Long-short: {_band_bar(signed_ls)}"),
-        e(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        # e(f"Long-short: {_band_bar(signed_ls)}"),
+        e(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        e(f"Position is {ls_direction}."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
-        e(f"FOIL decay: {_band_bar(signed_foil)}"),
-        e(f"{abs(short_notional - target) / target:.1%} off target."),
+        # e(f"FOIL decay: {_band_bar(signed_foil)}"),
+        e(f"FOIL decay band: {abs(short_notional - target) / target:.1%} off target."),
+        e(f"Position is {foil_direction}."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
         "",
         "*" + e("ACTION TO TAKE") + "*",
@@ -431,6 +436,8 @@ def build_calc_reply(ib, args, state):
         
     # signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
     signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
+    
+    ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
      
     lines += [
         # e(f"target (short) = base_capital ${base_capital:,.2f} x "),
@@ -448,8 +455,9 @@ def build_calc_reply(ib, args, state):
         # e(f"FOIL decay: {_band_bar(signed_foil)}"),
         # e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
-        e(f"Long-short: {_band_bar(signed_ls)}"),
-        e(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        # e(f"Long-short: {_band_bar(signed_ls)}"),
+        e(f"Long=short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        e(f"Position is {ls_direction}"),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
         "*" + e("TRIPS") + "*",
@@ -603,6 +611,8 @@ def build_calcaction_reply(ib, args, state):
         
     # signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
     signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
+    
+    ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
      
     lines += [
         # e(f"target (short) = base_capital ${base_capital:,.2f} x "),
@@ -620,8 +630,9 @@ def build_calcaction_reply(ib, args, state):
         # e(f"FOIL decay: {_band_bar(signed_foil)}"),
         # e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
-        e(f"Long-short: {_band_bar(signed_ls)}"),
-        e(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        # e(f"Long-short: {_band_bar(signed_ls)}"),
+        e(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        e(f"Position is {ls_direction}."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
         "*" + e("ACTION TO TAKE") + "*",
@@ -861,11 +872,16 @@ def _handle_setshares(ib, args, state):
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
     signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
     
-    lines.append(f"Long-short: {_band_bar(signed_ls)}")
-    lines.append(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
+    ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
+    foil_direction = "long ➡️🟢" if signed_foil > 0 else "short ⬅️🔴"
+    
+    # lines.append(f"Long-short: {_band_bar(signed_ls)}")
+    lines.append(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
+    lines.append(f"Position is {ls_direction}.")
     # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
-    lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
-    lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
+    # lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
+    lines.append(f"FOIL decay band: {abs(short_notional - target) / target:.1%} off target.")
+    lines.append(f"Position is {foil_direction}.")
     # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:20%} band.")
     
     return "\n".join(lines)
@@ -943,11 +959,16 @@ def _handle_resize(ib, args, state):
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
     signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
     
-    lines.append(f"Long-short: {_band_bar(signed_ls)}")
-    lines.append(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
+    ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
+    foil_direction = "long ➡️🟢" if signed_foil > 0 else "short ⬅️🔴"
+    
+    # lines.append(f"Long-short: {_band_bar(signed_ls)}")
+    lines.append(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
+    lines.append(f"Position is {ls_direction}.")
     # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
-    lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
-    lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
+    # lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
+    lines.append(f"FOIL decay band: {abs(short_notional - target) / target:.1%} off target.")
+    lines.append(f"Position is {foil_direction}.")
     # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
     
     return "\n".join(lines)
@@ -1093,11 +1114,16 @@ def _handle_shares_report(ib, args, state):
                 f"(target ${target:,.2f})"
             )
             
-            lines.append(f"Long-short: {_band_bar(signed_ls)}")
-            lines.append(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
+            ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
+            foil_direction = "long ➡️🟢" if signed_foil > 0 else "short ⬅️🔴"
+            
+            # lines.append(f"Long-short: {_band_bar(signed_ls)}")
+            lines.append(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
+            lines.append(f"Position is {ls_direction}.")
             # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
-            lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
-            lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
+            # lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
+            lines.append(f"FOIL decay band: {abs(short_notional - target) / target:.1%} off target.")
+            lines.append(f"Position is {foil_direction}.")
             # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
             
     return "\n".join(lines) if lines else "No pairs have shares set."
