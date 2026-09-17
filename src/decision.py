@@ -124,7 +124,7 @@ def evaluate(state, params):
             net_delta=net_delta, margin_cushion=margin_cushion,
         )
 
-    if abs(net_delta) > params.long_short_band * state.target:
+    if abs(net_delta) > params.long_short_band * L * state.target:
         # Long leg only: the short carries at its current, drifted value.
         return Decision(
             trigger="long-short band", terminal=False,
