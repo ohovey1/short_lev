@@ -252,8 +252,9 @@ def build_calcfull_reply(ib, args, state):
         #   f"short ${short_notional:,.2f}"),
         # e(f"= ${net_delta:,.2f}"),
         "",
-        e(f"bands: long_short={LONG_SHORT_BAND:.2%}  "
-          f"FOIL_decay={FOIL_DECAY_BAND:.2%}"),
+        "*" + e("BANDS") + "*",
+        e(f"Trip limits: long_short={LONG_SHORT_BAND:.2%}  "
+          f"FOIL_decay={FOIL_DECAY_BAND:.2%}\n"),
         # e(f"Long-short: {_band_bar(signed_ls)}"),
         e(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         e(f"Position is {ls_direction}."),
@@ -456,7 +457,7 @@ def build_calc_reply(ib, args, state):
         # e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
         # e(f"Long-short: {_band_bar(signed_ls)}"),
-        e(f"Long=short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        e(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         e(f"Position is {ls_direction}"),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
@@ -1123,7 +1124,7 @@ def _handle_shares_report(ib, args, state):
             # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
             # lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
             lines.append(f"FOIL decay band: {abs(short_notional - target) / target:.1%} off target.")
-            lines.append(f"Position is {foil_direction}.")
+            lines.append(f"Position is {foil_direction}.\n")
             # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
             
     return "\n".join(lines) if lines else "No pairs have shares set."
