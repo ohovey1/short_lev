@@ -250,10 +250,10 @@ def build_calcfull_reply(ib, args, state):
         "",
         e(f"bands: long_short={LONG_SHORT_BAND:.2%}  "
           f"FOIL_decay={FOIL_DECAY_BAND:.2%}"),
-        e(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}"),
+        e(f"Long-short: {_band_bar(signed_ls)}"),
         e(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
-        e(f"FOIL decay: {_band_bar(signed_foil, defining_band=FOIL_DECAY_BAND*10)}"),
+        e(f"FOIL decay: {_band_bar(signed_foil)}"),
         e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
         "",
@@ -447,7 +447,7 @@ def build_calc_reply(ib, args, state):
         # e(f"FOIL decay: {_band_bar(signed_foil)}"),
         # e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
-        e(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}"),
+        e(f"Long-short: {_band_bar(signed_ls)}"),
         e(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
@@ -619,7 +619,7 @@ def build_calcaction_reply(ib, args, state):
         # e(f"FOIL decay: {_band_bar(signed_foil)}"),
         # e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
-        e(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}"),
+        e(f"Long-short: {_band_bar(signed_ls)}"),
         e(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
@@ -860,10 +860,10 @@ def _handle_setshares(ib, args, state):
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
     signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
     
-    lines.append(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}")
+    lines.append(f"Long-short: {_band_bar(signed_ls)}")
     lines.append(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
     # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
-    lines.append(f"FOIL decay: {_band_bar(signed_foil, defining_band=FOIL_DECAY_BAND*10)}")
+    lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
     lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
     # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:20%} band.")
     
@@ -942,10 +942,10 @@ def _handle_resize(ib, args, state):
     signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
     signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
     
-    lines.append(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}")
+    lines.append(f"Long-short: {_band_bar(signed_ls)}")
     lines.append(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
     # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
-    lines.append(f"FOIL decay: {_band_bar(signed_foil, defining_band=FOIL_DECAY_BAND*10)}")
+    lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
     lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
     # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
     
@@ -1092,10 +1092,10 @@ def _handle_shares_report(ib, args, state):
                 f"(target ${target:,.2f})"
             )
             
-            lines.append(f"Long-short: {_band_bar(signed_ls, defining_band=LONG_SHORT_BAND*10)}")
+            lines.append(f"Long-short: {_band_bar(signed_ls)}")
             lines.append(f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
             # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
-            lines.append(f"FOIL decay: {_band_bar(signed_foil, defining_band=FOIL_DECAY_BAND*10)}")
+            lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
             lines.append(f"{abs(short_notional - target) / target:.1%} off target.")
             # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
             
