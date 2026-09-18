@@ -815,7 +815,7 @@ def _check_pair(ib, pair_key, state, send):
     foil_level = _alert_level(reading["foil_frac"], foil_decay_band)
     ls_level = _alert_level(reading["long_short_frac"], long_short_band)
     
-    _maybe_alert(pair_key, "foil", entry, "last_alert_foil", foil_level, 
+    _maybe_alert(pair_key, "FOIL", entry, "last_alert_foil", foil_level, 
                  reading["foil_frac"], foil_decay_band, send)
     _maybe_alert(pair_key, "long-short", entry, "last_alert_long_short", ls_level, 
                  reading["long_short_frac"], long_short_band, send)
