@@ -1080,7 +1080,7 @@ def _handle_rescale(ib, args, state):
 
 def _handle_untrack(args, state):
     if len(args) != 1:
-        return "Usage: /untrack PAIR_KEY\nExample: /untrack TQQQ"
+        return "Usage: /untrack PAIR_KEY\nExample: /untrack QQQ"
     pair_key_raw = args[0].upper()
     
     pair_key = _resolve_pair_key(pair_key_raw)
@@ -1099,25 +1099,40 @@ def _handle_listshares(state):
         return "No pairs have shares set. Use /setshares to add one."\
             
     lines = []
+    orphaned = []
     for k, e in state["pairs"].items():
         ss, sl, bc =  e.get("shares_short"), e.get("shares_long"),  e.get("base_capital")
         if ss is None or sl is None or bc is None:
             continue
+        
         pair = config.PAIRS[k]
+        if pair is None:
+            orphaned.append(k)
+            continue
         target = (bc * config.DEFAULT_CAPITAL_UTILIZATION / config.margin_multiplier(pair))
         if ss == 0 and sl == 0:
             lines.append(f" {k}: paused (target ${target:,.2f})")
         else:
             lines.append(f" {k}: short {ss:,.0f} / long {sl:,.0f} (target ${target:,.2f})")
+            
+    if orphaned:
+        log.warning("listshares: %s match no config.PAIRS entry -- stale key? "
+                    "consider /untrack or a stale migration.", ", ".join(orphaned))
+        lines.append(f"\n {', '.join(orphaned)} tracked in state but not in config.PAIRS "
+                     f"(stale key -- use /untrack or fix state file).")
     return "\n".join(lines) if lines else  "No pairs have shares set."
     
 def _handle_shares_report(ib, args, state):
     if not state["pairs"]:
         return "No pairs have shares set. Use /setshares to add one."
     lines = []
+    orphaned = []
     for k, e in state["pairs"].items():
         if e.get("shares_short") and e.get("shares_long") and e.get("base_capital"):
             pair = config.PAIRS[k]
+            if pair is None:
+                orphaned.append(k)
+                continue
             target = (e["base_capital"] * config.DEFAULT_CAPITAL_UTILIZATION
                       / config.margin_multiplier(pair))
             
@@ -1150,7 +1165,13 @@ def _handle_shares_report(ib, args, state):
             lines.append(f"FOIL decay band: {abs(short_notional - target) / target:.1%} off target.")
             lines.append(f"Direction is {foil_direction}.\n")
             # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
-            
+    
+    if orphaned:
+        log.warning("shares report: %s match no config.PAIRS entry -- stale key? "
+                    "consider /untrack or a stale migration.", ", ".join(orphaned))
+        lines.append(f"\n {', '.join(orphaned)} tracked in state but not in config.PAIRS "
+                     f"(stale key -- use /untrack or fix state file).")
+    
     return "\n".join(lines) if lines else "No pairs have shares set."
 
 def _band_bar(signed_frac, n_cells=6, defining_band=0.75):
