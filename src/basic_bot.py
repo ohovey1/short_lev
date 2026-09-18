@@ -275,8 +275,8 @@ def build_calcfull_reply(ib, args, state):
         # e(f"= ${net_delta:,.2f}"),
         "",
         "*" + e("BANDS") + "*",
-        e(f"Trip limits: long_short={long_short_band:.2%}  "
-          f"FOIL_decay={foil_decay_band:.2%}\n"),
+        e(f"Trip limits: long_short = {long_short_band:.2%}  "
+          f"FOIL_decay = {foil_decay_band:.2%}\n"),
         # e(f"Long-short: {_band_bar(signed_ls)}"),
         e(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         e(f"Direction is {ls_direction}."),
@@ -487,6 +487,9 @@ def build_calc_reply(ib, args, state):
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
         "*" + e("TRIPS") + "*",
+        e(f"Trip limits: long_short = {long_short_band:.2%}  "
+          f"FOIL_decay = {foil_decay_band:.2%}\n"),
+        "",
     ]
  
     if abs(short_notional - target) > foil_decay_band * target:
@@ -666,6 +669,9 @@ def build_calcaction_reply(ib, args, state):
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
         "*" + e("ACTION TO TAKE") + "*",
+        e(f"Trip limits: long_short = {long_short_band:.2%}  "
+          f"FOIL_decay = {foil_decay_band:.2%}\n"),
+        "",
     ]
  
     if abs(short_notional - target) > foil_decay_band * target:
