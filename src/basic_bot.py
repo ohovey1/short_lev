@@ -95,7 +95,7 @@ def _bands_for(ticker):
     pair = _BY_LEVERAGED.get(ticker.upper())
     if pair:
         ls_band, foil_band, source = pair["ideal_ls_band"], pair["ideal_foil_decay_band"], "config.PAIRS backtested"
-        if ls_band and foil_band and source:
+        if ls_band is not None and foil_band is not None:
             return ls_band, foil_band, source
     return (FOIL_DECAY_BAND, LONG_SHORT_BAND, "generic fallback")  
 

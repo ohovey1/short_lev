@@ -119,11 +119,14 @@ PAIRS = {
             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.90,
             "ideal_ls_band": 0.12, "ideal_foil_decay_band": 0.15},
     "PALL": {"leveraged_ticker": "UPAL", "underlying_ticker": "PALL", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
+             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60,
+             "ideal_ls_band": None, "ideal_foil_decay_band": None},
     "PPLT": {"leveraged_ticker": "UPLT", "underlying_ticker": "PPLT", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
+             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60,
+             "ideal_ls_band": None, "ideal_foil_decay_band": None},
     "CPER": {"leveraged_ticker": "UCOP", "underlying_ticker": "CPER", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
+             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60,
+             "ideal_ls_band": None, "ideal_foil_decay_band": None},
 }
 
 
