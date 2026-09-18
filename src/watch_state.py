@@ -23,8 +23,10 @@ DEFAULT_STATE_PATH = os.path.join(
 def state_path():
     return os.environ.get("WATCH_STATE_PATH") or DEFAULT_STATE_PATH
 
-'''
-def _migrate_keys(data, pairs_by_key, key_by_leveraged):
+def _has_data(entry):
+    return entry is not None and entry.get("shares_short") is not None
+
+def _migrate_keys(data, pairs, key_by_leveraged):
     """
     Rekey state["pairs"] from leveraged to underlying.
     
@@ -36,27 +38,36 @@ def _migrate_keys(data, pairs_by_key, key_by_leveraged):
     """
     old_pairs = data.get("pairs") or {}
     new_pairs = {}
-    migrated, orphaned = [], []
+    migrated, orphaned, collisions = [], [], []
     
     for key, entry in old_pairs.items():
         upper = key.upper()
-        for upper in pairs_by_key:
-            new_pairs[upper] = entry
-            continue
-        mapped = key_by_leveraged.get(upper)
-        if mapped:
-            if mapped in new_pairs:
-                raise SystemExit(
-                    f"Watch state migration: both {upper} and earlier key "
-                    f"map to {mapped}. Refusing to guess which entry to keep -- "
-                    f"inspect the state file and remove one by hand."
-                )
-            new_pairs[mapped] = entry
-            migrated.append(f"{upper} --> (mapped)")
+        if upper in pairs:
+            target = upper
         else:
-            new_pairs[upper] = entry
-            orphaned.append(upper)
-            
+            mapped = key_by_leveraged.get(upper)
+            if mapped:
+                target = mapped
+                migrated.append(f"{upper} --> {mapped}")
+            else:
+                target = upper
+                if upper not in orphaned:
+                    orphaned.append(upper)
+        if target not in new_pairs:
+            new_pairs[target] = entry
+        elif _has_data(entry) and not _has_data(new_pairs[target]):
+            new_pairs[target] = entry
+        elif _has_data(entry) and _has_data(new_pairs[target]):
+            collisions.append(target)
+    
+    if collisions:
+        raise SystemExit(
+            f"Watch state migration: multiple keys with real data map to "
+            f"the same target: {', '.join(sorted(set(collisions)))}. "
+            "Refusing to guess which entry to keep -- "
+            f"inspect the state file and remove one by hand."
+        )
+        
     if migrated:
         log.info("Watch state: rekeyed %d pair(s) to underlying tickers: %s",
                  len(migrated), ", ".join(migrated))
@@ -69,7 +80,7 @@ def _migrate_keys(data, pairs_by_key, key_by_leveraged):
         )
     data["pairs"] = new_pairs
     return data
-'''
+
 
 def load(path):
     if not os.path.exists(path):
@@ -94,12 +105,13 @@ def load(path):
     data.setdefault("last_morning_date", None)
     data.setdefault("last_eod_date", None)
     
-    """
+    import config_detailed as config
     data = _migrate_keys(
         data, 
         config.PAIRS,
         {p["leveraged_ticker"].upper(): k for k, p in config.PAIRS.items()}
-    )"""
+    )
+    
     log.info("restored watch state from %s: %d pair(s)", path, len(data["pairs"]))
     return data
 
