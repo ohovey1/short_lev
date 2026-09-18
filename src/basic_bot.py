@@ -1190,11 +1190,13 @@ def _handle_shares_report(ib, args, state):
             foil_direction = "long ➡️🟢" if signed_foil > 0 else "short ⬅️🔴"
             
             # lines.append(f"Long-short: {_band_bar(signed_ls)}")
-            lines.append(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target.")
+            lines.append(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target. "
+                         f"(trip at {long_short_band:.2%}).")
             lines.append(f"Direction is {ls_direction}.")
             # lines.append(f"{signed_ls:.1%} of a {LONG_SHORT_BAND:.2%} band.")
             # lines.append(f"FOIL decay: {_band_bar(signed_foil)}")
-            lines.append(f"FOIL decay band: {abs(short_notional - target) / target:.1%} off target.")
+            lines.append(f"FOIL decay band: {abs(short_notional - target) / target:.1%} off target. "
+                         f"(trip at {foil_decay_band:.2%}).")
             lines.append(f"Direction is {foil_direction}.\n")
             # lines.append(f"{signed_foil:.1%} of a {FOIL_DECAY_BAND:.2%} band.")
     
