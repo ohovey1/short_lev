@@ -91,14 +91,22 @@ EOD_HOUR, EOD_MINUTE = _time_env("WATCH_EOD_HOUR", 15, 55)
 _BY_LEVERAGED = {pair["leveraged_ticker"].upper(): pair for pair in config.PAIRS.values()}
 _KEY_BY_LEVERAGED = {pair["leveraged_ticker"].upper(): k for k, pair in config.PAIRS.items()}
 
+def _bands_for(ticker):
+    pair = _BY_LEVERAGED.get(ticker.upper())
+    if pair:
+        ls_band, foil_band, source = pair["ideal_ls_band"], pair["ideal_foil_decay_band"], "config.PAIRS backtested"
+        if ls_band and foil_band and source:
+            return ls_band, foil_band, source
+    return (FOIL_DECAY_BAND, LONG_SHORT_BAND, "generic fallback")  
+
 # todo edited 
 def _rates_for(short_ticker, leverage):
     pair = _BY_LEVERAGED.get(short_ticker.upper())
     if pair:
         return pair["long_rate"], pair["short_rate"], pair["leverage"], "config.PAIRS (IBKR-observed)"
     return (REG_T_LONG_RATE, REG_T_SHORT_RATE_PER_LEVERAGE * leverage, leverage,
-            "generic Reg-T fallback -- NOT IBKR-confirmed for this ticker")
- 
+            "generic Reg-T fallback -- NOT IBKR-confirmed for this ticker")    
+
 _SNAPSHOT_WAIT_SECONDS = 8.0
 _SNAPSHOT_POLL_SECONDS = 0.25
  
@@ -248,8 +256,9 @@ def build_calcfull_reply(ib, args, state):
         )
         lines.append("")
         
-    signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
+    long_short_band, foil_decay_band, source = _bands_for(short_ticker)    
+    signed_foil = (short_notional - target) / target / foil_decay_band
+    signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
     
     ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
     foil_direction = "long ➡️🟢" if signed_foil > 0 else "short ⬅️🔴"
@@ -266,8 +275,8 @@ def build_calcfull_reply(ib, args, state):
         # e(f"= ${net_delta:,.2f}"),
         "",
         "*" + e("BANDS") + "*",
-        e(f"Trip limits: long_short={LONG_SHORT_BAND:.2%}  "
-          f"FOIL_decay={FOIL_DECAY_BAND:.2%}\n"),
+        e(f"Trip limits: long_short={long_short_band:.2%}  "
+          f"FOIL_decay={foil_decay_band:.2%}\n"),
         # e(f"Long-short: {_band_bar(signed_ls)}"),
         e(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
         e(f"Direction is {ls_direction}."),
@@ -280,7 +289,7 @@ def build_calcfull_reply(ib, args, state):
         "*" + e("ACTION TO TAKE") + "*",
     ]
  
-    if abs(short_notional - target) > FOIL_DECAY_BAND * target:
+    if abs(short_notional - target) > foil_decay_band * target:
         new_short_shares = round(target / price_short)
         new_long_shares = round((leverage * target) / price_long)
         
@@ -303,7 +312,7 @@ def build_calcfull_reply(ib, args, state):
             f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares_alt:,d} sh\n"
             f"    Target resized to match long leg: ${target:,.0f} -> ${new_target_long:,.0f}"
         ))
-    elif abs(net_delta) > LONG_SHORT_BAND * leverage * target:
+    elif abs(net_delta) > long_short_band * leverage * target:
         new_long_shares = round((leverage * short_notional) / price_long)
         new_short_shares_alt = round(long_notional / (leverage * price_short))
         lines.append(e(
@@ -449,8 +458,10 @@ def build_calc_reply(ib, args, state):
         )
         lines.append("")
         
+    long_short_band, foil_decay_band, source = _bands_for(short_ticker)    
+    
     # signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
+    signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
     
     ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
      
@@ -478,13 +489,13 @@ def build_calc_reply(ib, args, state):
         "*" + e("TRIPS") + "*",
     ]
  
-    if abs(short_notional - target) > FOIL_DECAY_BAND * target:
+    if abs(short_notional - target) > foil_decay_band * target:
         lines.append(e(
             f"TRIP: FOIL decay band -- short notional is "
             f"{abs(short_notional - target) / target:.1%} off target.\n"
             "To get specific options for action to take: run /calcaction or /calcfull\n"
         ))
-    elif abs(net_delta) > LONG_SHORT_BAND * leverage * target:
+    elif abs(net_delta) > long_short_band * leverage * target:
         lines.append(e(
             f"TRIP: long-short band -- net delta is "
             f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.\n"
@@ -626,8 +637,10 @@ def build_calcaction_reply(ib, args, state):
         )
         lines.append("")
         
+    long_short_band, foil_decay_band, source = _bands_for(short_ticker)    
+        
     # signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
+    signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
     
     ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
      
@@ -655,7 +668,7 @@ def build_calcaction_reply(ib, args, state):
         "*" + e("ACTION TO TAKE") + "*",
     ]
  
-    if abs(short_notional - target) > FOIL_DECAY_BAND * target:
+    if abs(short_notional - target) > foil_decay_band * target:
         new_short_shares = round(target / price_short)
         new_long_shares = round((leverage * target) / price_long)
         
@@ -678,7 +691,7 @@ def build_calcaction_reply(ib, args, state):
             f"    {short_ticker.upper()}: {shares_short:,.0f} -> {new_short_shares_alt:,d} sh\n"
             f"    Target resized to match long leg: ${target:,.0f} -> ${new_target_long:,.0f}"
         ))
-    elif abs(net_delta) > LONG_SHORT_BAND * leverage * target:
+    elif abs(net_delta) > long_short_band * leverage * target:
         new_long_shares = round((leverage * short_notional) / price_long)
         new_short_shares_alt = round(long_notional / (leverage * price_short))
         lines.append(e(
@@ -790,13 +803,16 @@ def _check_pair(ib, pair_key, state, send):
     if reading is None:
         return
     
-    foil_level = _alert_level(reading["foil_frac"], FOIL_DECAY_BAND)
-    ls_level = _alert_level(reading["long_short_frac"], LONG_SHORT_BAND)
+    pair = config.PAIRS[pair_key]
+    long_short_band, foil_decay_band, source = _bands_for(pair["leveraged_ticker"])    
+    
+    foil_level = _alert_level(reading["foil_frac"], foil_decay_band)
+    ls_level = _alert_level(reading["long_short_frac"], long_short_band)
     
     _maybe_alert(pair_key, "foil", entry, "last_alert_foil", foil_level, 
-                 reading["foil_frac"], FOIL_DECAY_BAND, send)
+                 reading["foil_frac"], foil_decay_band, send)
     _maybe_alert(pair_key, "long-short", entry, "last_alert_long_short", ls_level, 
-                 reading["long_short_frac"], LONG_SHORT_BAND, send)
+                 reading["long_short_frac"], long_short_band, send)
         
 def _heartbeat_due(state, key, now_et, hour, minute):
     today = now_et.date().isoformat()
@@ -873,8 +889,10 @@ def _handle_setshares(ib, args, state):
     entry["shares_long"] = shares_long
     entry["base_capital"] = base_capital
     
+    long_short_band, foil_decay_band, source = _bands_for(pair["leveraged_ticker"])    
+    
     entry["last_alert_foil"] = None
-    entry["last_alert_long_short"] = _alert_level(long_short_frac, LONG_SHORT_BAND)
+    entry["last_alert_long_short"] = _alert_level(long_short_frac, long_short_band)
     
     lines = [
         f"{pair_key}: short {shares_short:,.0f} @ ${price_short:,.2f}, "
@@ -884,12 +902,12 @@ def _handle_setshares(ib, args, state):
     if entry["last_alert_long_short"]:
         lines.append(
             f"Note: long-short is already at {long_short_frac:.1%} of its "
-            f"{LONG_SHORT_BAND:.2%} band with these numbers -- "
+            f"{long_short_band:.2%} band with these numbers -- "
             f"not flagged as new since you just set it."
         )
         
-    signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
+    signed_foil = (short_notional - target) / target / foil_decay_band
+    signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
     
     ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
     foil_direction = "long ➡️🟢" if signed_foil > 0 else "short ⬅️🔴"
@@ -961,15 +979,18 @@ def _handle_resize(ib, args, state):
     
     entry["shares_short"] = shares_short
     entry["shares_long"] = shares_long
-    entry["last_alert_foil"] = _alert_level(foil_frac, FOIL_DECAY_BAND)
-    entry["last_alert_long_short"] = _alert_level(long_short_frac, LONG_SHORT_BAND)
+    
+    long_short_band, foil_decay_band, source = _bands_for(pair["leveraged_ticker"])    
+    
+    entry["last_alert_foil"] = _alert_level(foil_frac, foil_decay_band)
+    entry["last_alert_long_short"] = _alert_level(long_short_frac, long_short_band)
     
     lines = [
         f"{pair_key}: short {shares_short:,.0f} @ ${price_short:,.2f}, "
         f"long {shares_long:,.0f} @ ${price_long:,.2f}",
         f"Target unchanged: target = ${target:,.2f} (= ${base_capital:,.2f})",
-        f"FOIL={foil_frac:.1%} of {FOIL_DECAY_BAND:.2%} band, "
-        f"long-short={long_short_frac:.1%} of {LONG_SHORT_BAND:.2%} band, "
+        f"FOIL={foil_frac:.1%} of {foil_decay_band:.2%} band, "
+        f"long-short={long_short_frac:.1%} of {long_short_band:.2%} band, "
     ]
     if entry["last_alert_foil"] or entry["last_alert_long_short"]:
         lines.append(
@@ -977,8 +998,8 @@ def _handle_resize(ib, args, state):
             "not flagged as new new since you just set it."
         )
         
-    signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
+    signed_foil = (short_notional - target) / target / foil_decay_band
+    signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
     
     ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
     foil_direction = "long ➡️🟢" if signed_foil > 0 else "short ⬅️🔴"
@@ -1057,8 +1078,11 @@ def _handle_rescale(ib, args, state):
     entry["shares_short"] = new_short
     entry["shares_long"] = new_long
     entry["base_capital"] = new_base_capital
-    entry["last_alert_foil"] = _alert_level(foil_frac, FOIL_DECAY_BAND)
-    entry["last_alert_long_short"] = _alert_level(long_short_frac, LONG_SHORT_BAND)
+    
+    long_short_band, foil_decay_band, source = _bands_for(pair["leveraged_ticker"])    
+    
+    entry["last_alert_foil"] = _alert_level(foil_frac, foil_decay_band)
+    entry["last_alert_long_short"] = _alert_level(long_short_frac, long_short_band)
     
     lines = [f"{pair_key}: scaled {scale_factor:.3f}x (short leg {old_short:,.0f} --> {new_short:,.0f})",
              f"Target scaled to match: ${old_target:,.2f} --> ${new_target:,.2f} "
@@ -1146,8 +1170,10 @@ def _handle_shares_report(ib, args, state):
             long_notional = e["shares_long"] * price_long
             net_delta = long_notional - pair["leverage"] * short_notional
             
-            signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-            signed_ls = net_delta / (pair["leverage"] * target) / LONG_SHORT_BAND
+            long_short_band, foil_decay_band, source = _bands_for(pair["leveraged_ticker"])    
+            
+            signed_foil = (short_notional - target) / target / foil_decay_band
+            signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
             
             lines.append(
                 f"{k}: short {e['shares_short']:,.0f} / long {e['shares_long']:,.0f} "
