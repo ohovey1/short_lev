@@ -488,7 +488,7 @@ def build_calc_reply(ib, args, state):
         "",
         "*" + e("TRIPS") + "*",
         e(f"Trip limits: long_short = {long_short_band:.2%}  "
-          f"FOIL_decay = {foil_decay_band:.2%}\n"),
+          f"FOIL_decay = {foil_decay_band:.2%}"),
         "",
     ]
  
@@ -670,7 +670,7 @@ def build_calcaction_reply(ib, args, state):
         "",
         "*" + e("ACTION TO TAKE") + "*",
         e(f"Trip limits: long_short = {long_short_band:.2%}  "
-          f"FOIL_decay = {foil_decay_band:.2%}\n"),
+          f"FOIL_decay = {foil_decay_band:.2%}"),
         "",
     ]
  
