@@ -1141,9 +1141,9 @@ def _handle_listshares(state):
             continue
         target = (bc * config.DEFAULT_CAPITAL_UTILIZATION / config.margin_multiplier(pair))
         if ss == 0 and sl == 0:
-            lines.append(f" {k}: paused (target ${target:,.2f})")
+            lines.append(f"{k} / {pair['leveraged_ticker']}: paused (target ${target:,.2f})")
         else:
-            lines.append(f" {k}: short {ss:,.0f} / long {sl:,.0f} (target ${target:,.2f})")
+            lines.append(f"{k} / {pair['leveraged_ticker']}: short {ss:,.0f} / long {sl:,.0f} (target ${target:,.2f})")
             
     if orphaned:
         log.warning("listshares: %s match no config.PAIRS entry -- stale key? "
@@ -1182,7 +1182,7 @@ def _handle_shares_report(ib, args, state):
             signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
             
             lines.append(
-                f"{k}:\n"
+                f"{k} / {pair['leveraged_ticker']}:\n"
                 f"short {e['shares_short']:,.0f} / long {e['shares_long']:,.0f} "
                 f"(target ${target:,.2f})"
             )
