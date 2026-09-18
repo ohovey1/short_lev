@@ -23,9 +23,10 @@ DEFAULT_STATE_PATH = os.path.join(
 def state_path():
     return os.environ.get("WATCH_STATE_PATH") or DEFAULT_STATE_PATH
 
-"""
+'''
 def _migrate_keys(data, pairs_by_key, key_by_leveraged):
-    """Rekey state["pairs"] from leveraged to underlying.
+    """
+    Rekey state["pairs"] from leveraged to underlying.
     
     A key already under new scheme left alone. 
     
@@ -68,7 +69,7 @@ def _migrate_keys(data, pairs_by_key, key_by_leveraged):
         )
     data["pairs"] = new_pairs
     return data
-"""
+'''
 
 def load(path):
     if not os.path.exists(path):
