@@ -461,7 +461,7 @@ def build_calc_reply(ib, args, state):
     long_short_band, foil_decay_band, source = _bands_for(short_ticker)    
     
     # signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
+    signed_ls = net_delta / (leverage_in * target) / long_short_band
     
     ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
      
@@ -482,7 +482,7 @@ def build_calc_reply(ib, args, state):
         # e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
         # e(f"Long-short: {_band_bar(signed_ls)}"),
-        e(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        e(f"Long-short band: {abs(net_delta) / (leverage_in * target):.1%} off target."),
         e(f"Direction is {ls_direction}"),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
@@ -501,7 +501,7 @@ def build_calc_reply(ib, args, state):
     elif abs(net_delta) > long_short_band * leverage * target:
         lines.append(e(
             f"TRIP: long-short band -- net delta is "
-            f"{abs(net_delta) / (pair['leverage'] * target):.1%} off target.\n"
+            f"{abs(net_delta) / (leverage_in * target):.1%} off target.\n"
             "To get specific options for action to take: run /calcaction or /calcfull\n"
         ))
     else:
@@ -643,7 +643,7 @@ def build_calcaction_reply(ib, args, state):
     long_short_band, foil_decay_band, source = _bands_for(short_ticker)    
         
     # signed_foil = (short_notional - target) / target / FOIL_DECAY_BAND
-    signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
+    signed_ls = net_delta / (leverage_in * target) / long_short_band
     
     ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
      
@@ -664,7 +664,7 @@ def build_calcaction_reply(ib, args, state):
         # e(f"{abs(short_notional - target) / target:.1%} off target."),
         # e(f"{signed_foil:.1%} of a {config.DEFAULT_FOIL_DECAY_BAND:.0%} band."),
         # e(f"Long-short: {_band_bar(signed_ls)}"),
-        e(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        e(f"Long-short band: {abs(net_delta) / (leverage_in * target):.1%} off target."),
         e(f"Direction is {ls_direction}."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         "",
