@@ -85,43 +85,6 @@ PAIRS = {
     # precious metals
     "AGQ": {"leveraged_ticker": "AGQ", "underlying_ticker": "SLV", "leverage": 2, "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
     "SHNY": {"leveraged_ticker": "SHNY", "underlying_ticker": "GLD", "leverage": 3, "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.90},
-    "UPAL": {"leveraged_ticker": "UPAL", "underlying_ticker": "PALL", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    "UPLT": {"leveraged_ticker": "UPLT", "underlying_ticker": "PPLT", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    "UCOP": {"leveraged_ticker": "UCOP", "underlying_ticker": "CPER", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    # newer funds
-    # July 2, 2026
-    "AAPE": {"leveraged_ticker": "AAPE", "underlying_ticker": "AAPL", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    # July 2, 2026
-    "AMZG": {"leveraged_ticker": "AMZG", "underlying_ticker": "AMZN", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    # June 23, 2026
-    "AEHG": {"leveraged_ticker": "AEHG", "underlying_ticker": "AEHR", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    # June 16, 2026
-    "ADIU": {"leveraged_ticker": "ADIU", "underlying_ticker": "ADI", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    # May 12, 2026
-    "AMAU": {"leveraged_ticker": "AMAU", "underlying_ticker": "AMAT", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    # May 12, 2026
-    "AAOG": {"leveraged_ticker": "AAOG", "underlying_ticker": "AAOI", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    # May 16, 2026
-    "AVGG": {"leveraged_ticker": "AVGG", "underlying_ticker": "AVGO", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    # lucid: with special treatment for defunct
-    # delisted leveraged
-    "LCDL": {"leveraged_ticker": "LCDL", "underlying_ticker": "LCID", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    "PLOO": {"leveraged_ticker": "PLOO", "underlying_ticker": "PLTR", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    "COIO": {"leveraged_ticker": "COIO", "underlying_ticker": "COIN", "leverage": 2, 
-             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    
 }
 
 
