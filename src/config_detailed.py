@@ -105,13 +105,13 @@ PAIRS = {
              "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60,
              "ideal_ls_band": 0.075, "ideal_foil_decay_band": 0.2},
     # "TSLL": {"leveraged_ticker": "TSLL", "underlying_ticker": "TSLA", "leverage": 2, "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60},
-    "COIN": {"leveraged_ticker": "CONL", "underlying_ticker": "COIN", "leverage": 2, 
+    "COIN": {"leveraged_ticker": "CONX", "underlying_ticker": "COIN", "leverage": 2, 
              "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60,
              "ideal_ls_band": 0.075, "ideal_foil_decay_band": 0.12},
     "TSLA": {"leveraged_ticker": "TSLT", "underlying_ticker": "TSLA", "leverage": 2, 
              "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60,
              "ideal_ls_band": 0.05, "ideal_foil_decay_band": 0.15},
-    # precious metalas
+    # precious metals
     "SLV": {"leveraged_ticker": "AGQ", "underlying_ticker": "SLV", "leverage": 2, 
             "borrow_rate_annual": 0.10, "live": False, "long_rate": 0.25, "short_rate": 0.60,
             "ideal_ls_band": 0.075, "ideal_foil_decay_band": 0.15},
