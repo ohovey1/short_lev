@@ -258,7 +258,7 @@ def build_calcfull_reply(ib, args, state):
         
     long_short_band, foil_decay_band, source = _bands_for(short_ticker)    
     signed_foil = (short_notional - target) / target / foil_decay_band
-    signed_ls = net_delta / (pair["leverage"] * target) / long_short_band
+    signed_ls = net_delta / (leverage_in * target) / long_short_band
     
     ls_direction = "long ➡️🟢" if signed_ls > 0 else "short ⬅️🔴"
     foil_direction = "long ➡️🟢" if signed_foil > 0 else "short ⬅️🔴"
