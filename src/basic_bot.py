@@ -278,7 +278,7 @@ def build_calcfull_reply(ib, args, state):
         e(f"Trip limits: long_short = {long_short_band:.2%}  "
           f"FOIL_decay = {foil_decay_band:.2%}\n"),
         # e(f"Long-short: {_band_bar(signed_ls)}"),
-        e(f"Long-short band: {abs(net_delta) / (pair['leverage'] * target):.1%} off target."),
+        e(f"Long-short band: {abs(net_delta) / (leverage_in * target):.1%} off target."),
         e(f"Direction is {ls_direction}."),
         # e(f"{signed_ls:.1%} of a {config.DEFAULT_LONG_SHORT_BAND:.0%} band."),
         # e(f"FOIL decay: {_band_bar(signed_foil)}"),
